@@ -4,9 +4,15 @@ A standalone, visual LoRA loader node for ComfyUI — organize LoRAs into groups
 
 中文说明：[README.zh.md](README.zh.md)
 
-![lyw-MA Loader node](docs/preview.png)
+**Main node UI**
 
-> The screenshot shows the Chinese UI. The node follows the system language: Chinese systems show Chinese, every other system shows English.
+![lyw-MA Loader node](docs/preview-node.png)
+
+**Add / Replace LoRA dialog**
+
+![Add or Replace LoRA dialog](docs/preview-lora-picker.png)
+
+> The screenshots show the Chinese UI. The node follows the system language: Chinese systems show Chinese, every other system shows English.
 
 ## Credits
 

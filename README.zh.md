@@ -4,7 +4,13 @@ ComfyUI 的独立可视化 LoRA 加载器：把 LoRA 编成群组、管理预设
 
 English: [README.md](README.md)
 
-![lyw-MA加载器节点](docs/preview.png)
+**主节点界面**
+
+![lyw-MA加载器节点](docs/preview-node.png)
+
+**添加 / 替换 LoRA 弹窗**
+
+![添加或替换 LoRA](docs/preview-lora-picker.png)
 
 > 截图为中文界面。节点跟随系统语言：中文系统显示中文，其它系统显示英文。
 
