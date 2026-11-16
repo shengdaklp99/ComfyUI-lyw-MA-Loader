@@ -1,0 +1,42 @@
+{
+  "MAPowerLoraLoader": {
+    "display_name": "lyw-MA Loader",
+    "description": "Visual LoRA loader: presets, folders, multi-select, per-row weights and notes, Civitai metadata and previews, trigger word output.",
+    "inputs": {
+      "lora_stack": {
+        "name": "LoRA Stack",
+        "tooltip": "Serialized LoRA list managed by the node UI. Do not edit manually."
+      },
+      "model": {
+        "name": "model",
+        "tooltip": "Model to patch with LoRAs."
+      },
+      "lora串接受": {
+        "name": "lora chain input",
+        "tooltip": "LoRA chain from an upstream loader. Only the terminal loader applies LoRAs."
+      }
+    },
+    "outputs": {
+      "0": { "name": "model" },
+      "1": { "name": "trigger words" },
+      "2": { "name": "lora chain output" }
+    }
+  },
+  "MALLMStyleFilter": {
+    "display_name": "lyw Style Filter",
+    "description": "Fast rule pass plus a tiny local LLM for ambiguous parts; strips style words so the LoRA style takes over.",
+    "inputs": {
+      "text": { "name": "prompt", "tooltip": "Full prompt; only the content description is kept." },
+      "clip": { "name": "clip", "tooltip": "Encodes the filtered text into conditioning." },
+      "触发词": { "name": "trigger words", "tooltip": "LoRA trigger words kept verbatim; connect the loader's trigger word output." },
+      "model_path": { "name": "model path", "tooltip": "Local GGUF model used for the ambiguous-part check." },
+      "n_gpu_layers": { "name": "GPU layers", "tooltip": "-1 = all on GPU; set 0 to use CPU when VRAM is tight." },
+      "max_llm_parts": { "name": "max LLM parts", "tooltip": "How many segments are sent to the LLM; 0 = rules only." },
+      "unload_after": { "name": "unload after run", "tooltip": "Free the model after running (saves VRAM, slower next run)." }
+    },
+    "outputs": {
+      "0": { "name": "content prompt" },
+      "1": { "name": "positive" }
+    }
+  }
+}

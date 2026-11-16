@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+
+# Local runtime data (favorites, presets, notes, sqlite, thumbnails)
+userdata/
+savedata/
+
+# Editor backups / old JS copies
+*.bak
+*.bak_*
+web/*.bak*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

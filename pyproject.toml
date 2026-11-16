@@ -1,0 +1,20 @@
+[project]
+name = "comfyui-lyw-ma-loader"
+description = "Powerful LoRA loader for ComfyUI: presets, folders, multi-select, Civitai metadata and previews, optional Lora Manager integration."
+version = "1.0.0"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = [
+    "Pillow",
+    "numpy",
+]
+
+[project.urls]
+Repository = "https://github.com/shengdaklp99/ComfyUI-lyw-MA-Loader"
+
+[tool.comfy]
+# Fill in after creating a ComfyUI Registry publisher, then run: comfy node publish
+PublisherId = ""
+DisplayName = "lyw MA Loader"
+Icon = ""
+requires-comfyui = ">=0.3.0"
