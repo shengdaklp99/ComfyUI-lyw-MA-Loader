@@ -26,6 +26,9 @@ if errorlevel 1 goto :fail
 set "HTTPS_PROXY=http://127.0.0.1:7897"
 set "HTTP_PROXY=http://127.0.0.1:7897"
 set "ALL_PROXY=http://127.0.0.1:7897"
+if not defined COMFY_REGISTRY_TOKEN (
+  for /f "usebackq delims=" %%k in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('COMFY_REGISTRY_TOKEN','User')"`) do set "COMFY_REGISTRY_TOKEN=%%k"
+)
 comfy node publish --changelog "%CHANGELOG%"
 if errorlevel 1 goto :fail
 
