@@ -8,6 +8,10 @@ A standalone, visual LoRA loader node for ComfyUI — organize LoRAs into groups
 
 > The screenshot shows the Chinese UI. The node follows the system language: Chinese systems show Chinese, every other system shows English.
 
+## Credits
+
+This plugin is based on and modified from [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant.git) by **shigjfg**. Special thanks to the original author for the work this plugin is built on.
+
 ## Features
 
 ### Visual LoRA list

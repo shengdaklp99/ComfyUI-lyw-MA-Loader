@@ -21,3 +21,5 @@ web/*.bak*
 Thumbs.db
 .idea/
 .vscode/
+
+node.zip

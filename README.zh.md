@@ -8,6 +8,10 @@ English: [README.md](README.md)
 
 > 截图为中文界面。节点跟随系统语言：中文系统显示中文，其它系统显示英文。
 
+## 致谢
+
+本插件是在 [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant.git) 的基础上修改而来。特别感谢作者 **shigjfg** 提供的基础工作。
+
 ## 功能
 
 ### 可视化 LoRA 列表
