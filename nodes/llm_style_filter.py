@@ -8,7 +8,7 @@ import re
 import threading
 import time
 
-DEFAULT_MODEL = r"E:\ComfyUI-aki-v1.3\models\LLM\Qwen3.5-4B\Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
+DEFAULT_MODEL = ""  # 分享包：请填写本机 gguf 模型路径
 
 _SYS = ("You classify numbered parts of an image prompt. STYLE = art medium, lighting, color grading, "
         "film/photo look, quality words, mood, genre. CONTENT = subject, people, objects, action, place, "

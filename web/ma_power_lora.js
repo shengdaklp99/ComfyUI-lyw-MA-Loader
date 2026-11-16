@@ -117,6 +117,118 @@ function mplColorModeSwitch(parent, initial, onChange) {
 function mplNormalizeLoraName(name) {
     return String(name || "").replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 }
+function mplClampWeight(v) {
+    return Math.max(-10, Math.min(10, Math.round(parseFloat(v) * 100) / 100));
+}
+function mplLoraWeight(l) {
+    const w = parseFloat(l && l.weight);
+    return Number.isFinite(w) ? w : 1;
+}
+function mplClipFollowsWeight(l) {
+    if (!l) return true;
+    if (typeof l.clipFollow === "boolean") return l.clipFollow;
+    const c = parseFloat(l.clipWeight);
+    return !Number.isFinite(c) || Math.abs(c - mplLoraWeight(l)) < 0.005;
+}
+function mplClipWeightValue(l) {
+    const c = parseFloat(l && l.clipWeight);
+    return Number.isFinite(c) ? c : mplLoraWeight(l);
+}
+function mplSyncClipWeight(l) {
+    if (l && mplClipFollowsWeight(l)) l.clipWeight = mplLoraWeight(l);
+}
+function mplSetCustomClipWeight(l, v) {
+    const n = parseFloat(v);
+    if (!l || !Number.isFinite(n)) return false;
+    l.clipFollow = false;
+    l.clipWeight = mplClampWeight(n);
+    return true;
+}
+function mplToggleClipFollow(l) {
+    if (!l) return true;
+    const follow = !mplClipFollowsWeight(l);
+    l.clipFollow = follow;
+    if (follow) mplSyncClipWeight(l);
+    return follow;
+}
+function mplUpdateClipBadgeUI(el, l) {
+    if (!el || !l) return;
+    mplSyncClipWeight(l);
+    const follow = mplClipFollowsWeight(l);
+    const cw = mplClipWeightValue(l);
+    el.textContent = "C " + cw.toFixed(2);
+    el.dataset.mode = follow ? "follow" : "custom";
+    const baseStyle = "flex:0 0 56px;width:56px;min-width:56px;height:20px;box-sizing:border-box;padding:2px 4px;border-radius:4px;text-align:center;font:11px Consolas,monospace;line-height:14px;cursor:pointer;";
+    if (follow) {
+        el.title = `CLIP 权重 ${cw.toFixed(2)}（跟随模型权重）\n右键切换为自定义`;
+        el.style.cssText = baseStyle + "border:1px solid #4b3f6b;background:#2a2440;color:#c6a9ff;";
+    } else {
+        el.title = `CLIP 权重 ${cw.toFixed(2)}（自定义）\n左键修改 / 右键恢复跟随模型权重`;
+        el.style.cssText = baseStyle + "border:1px solid #3aa6a1;background:#173a3a;color:#8fe3d2;";
+    }
+}
+
+// ===== LORA 串解析：兼容「LORA 应用」的 <lora:名称:模型权重:CLIP权重> 格式 =====
+// 名称可能只是裸文件名，而本机 LoRA 在子目录里；这里按 basename 自动补全为完整相对路径。
+function mplResolveLoraFileName(raw, options) {
+    const wanted = String(raw || "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!wanted) return { name: "", found: false };
+    const norm = (s) => String(s || "").replace(/\\/g, "/").replace(/^\.\//, "")
+        .toLowerCase().replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|onnx)$/i, "");
+    const list = Array.isArray(options) ? options : loraNamesOptionsCache;
+    const target = norm(wanted);
+    const base = target.split("/").pop();
+    if (Array.isArray(list) && list.length) {
+        const exact = list.find(f => norm(f) === target);
+        if (exact) return { name: exact, found: true };
+        const byBase = list.find(f => norm(f).split("/").pop() === base);
+        if (byBase) return { name: byBase, found: true };
+        const bySuffix = list.find(f => norm(f).endsWith("/" + base));
+        if (bySuffix) return { name: bySuffix, found: true };
+    }
+    return { name: wanted, found: false };
+}
+
+function mplParseLoraString(text, options) {
+    const src = String(text || "");
+    const out = [];
+    const seen = new Set();
+    const clampW = (v) => Math.max(-10, Math.min(10, Math.round(v * 100) / 100));
+    const push = (rawName, rawW, rawC) => {
+        const resolved = mplResolveLoraFileName(rawName, options);
+        const key = resolved.name.toLowerCase();
+        if (!resolved.name || seen.has(key)) return;
+        seen.add(key);
+        const wNum = parseFloat(rawW);
+        const cNum = parseFloat(rawC);
+        const mw = Number.isFinite(wNum) ? clampW(wNum) : 1;
+        const explicitClip = rawC !== undefined && String(rawC).trim() !== "";
+        const cw = Number.isFinite(cNum) ? clampW(cNum) : mw;
+        const clipFollow = !explicitClip || Math.abs(cw - mw) < 0.005;
+        out.push({
+            name: resolved.name,
+            weight: mw,
+            clipWeight: clipFollow ? mw : cw,
+            clipFollow,
+            enabled: true,
+            tags: "",
+            note: "",
+            triggerWords: "",
+            _found: resolved.found,
+        });
+    };
+    const re = /<lora:([^:>]+)(?::([^:>]+))?(?::([^:>]+))?>/gi;
+    let m;
+    while ((m = re.exec(src)) !== null) push(m[1], m[2], m[3]);
+    if (!out.length) {
+        // 兜底：没有 <lora:...> 时，按行/逗号接受「名称:模型权重:CLIP权重」
+        src.split(/[\r\n,]+/).map(s => s.trim()).filter(Boolean).forEach(line => {
+            const parts = line.split(":").map(s => s.trim());
+            push(parts[0], parts[1], parts[2]);
+        });
+    }
+    return out;
+}
 
 // 唯一的「是否启用」判定：只有显式 false / 0 / "false" 等才算停用，缺省一律启用。
 // 所有 UI 判断和序列化都必须走这里，避免两套语义（!enabled vs !== false）打架。
@@ -138,6 +250,18 @@ function mplNormalizeLoraData(data) {
         l.enabled = mplLoraEnabled(l);
         if (l.note === undefined) l.note = "";
         if (l.triggerWords === undefined) l.triggerWords = "";
+        const w = parseFloat(l.weight);
+        const c = parseFloat(l.clipWeight);
+        const baseW = Number.isFinite(w) ? w : 1;
+        if (!Number.isFinite(c)) {
+            l.clipWeight = baseW;
+            MPL_LAST_REPAIRS++;
+        }
+        if (typeof l.clipFollow !== "boolean") {
+            l.clipFollow = Math.abs(parseFloat(l.clipWeight) - baseW) < 0.005;
+            MPL_LAST_REPAIRS++;
+        }
+        if (l.clipFollow) l.clipWeight = baseW;
     };
     (Array.isArray(data.loras) ? data.loras : []).forEach(fix);
     (Array.isArray(data.folders) ? data.folders : []).forEach(f => {
@@ -981,8 +1105,12 @@ app.registerExtension({
                     const sv = this.layoutSettings.showWeightValue !== false ? 46 : 0;
                     dynMinW = Math.max(MPL_MIN_W + 20, MPL_MIN_W + 20 + Math.max(0, sw + sv - 60));
                 }
-                const w = Math.max(Array.isArray(result) ? result[0] : MPL_MIN_W, dynMinW);
-                const h = Math.max(Array.isArray(result) ? result[1] : MPL_MIN_H, MPL_MIN_H);
+                // 关键：必须把当前尺寸也算进去。ComfyUI 在点击/应用预设后会重算尺寸并重设节点，
+                // 只取 min(计算值, 下限) 会把用户已经拉宽的节点打回下限宽度，侧栏占比骤增、列表被挤没。
+                const curW = Array.isArray(this.size) ? (Number(this.size[0]) || 0) : 0;
+                const curH = Array.isArray(this.size) ? (Number(this.size[1]) || 0) : 0;
+                const w = Math.max(curW, Array.isArray(result) ? result[0] : MPL_MIN_W, dynMinW);
+                const h = Math.max(curH, Array.isArray(result) ? result[1] : MPL_MIN_H, MPL_MIN_H);
                 return [w, h];
             };
 
@@ -1136,11 +1264,12 @@ app.registerExtension({
                         const curMinW = computeMinWidth(this.layoutSettings);
                         size[0] = Math.max(size[0], curMinW);
                         size[1] = Math.max(size[1], MPL_MIN_H);
-                        // ComfyUI's DOM widget layout keeps an optional fixed
-                        // width. Clear the stale first-layout width so the
-                        // embedded UI always follows the actual node width.
+                        // ComfyUI 新版按 (widget.width ?? node.width) 给 DOM 覆盖层算宽度：
+                        // 一旦显式给 widget.width 赋值，界面就锁死在该宽度、不再跟随节点，
+                        // 表现为节点被拉宽后界面仍停在旧宽度、名字和权重被挤没。
+                        // 保持 null，让前端始终用 node.width 自动铺满。
                         if (this._mplDomWidget) {
-                            this._mplDomWidget.width = size[0];
+                            this._mplDomWidget.width = null;
                         }
                     }
                 };
@@ -1302,6 +1431,7 @@ app.registerExtension({
                     createBtn("plus", mplT("添加"), "mpl-btn-add", () => this.showAddLoraModal()),
                     createBtn("folderPlus", mplT("群组"), "mpl-btn-preset", () => this.addFolder()),
                     createBtn("download", mplT("下载"), "mpl-btn-metadata", () => this.showBatchMetadataModal()),
+                    createBtn("paste", "LORA串", "mpl-btn-lorastring", () => this.showLoraStringModal()),
                     createBtn("palette", mplT("颜色"), "mpl-btn-icon", () => this.showColorPresetModal()),
                     createBtn("settings", mplT("设置"), "mpl-btn-icon", () => this.showSettingsModal())
                 );
@@ -1323,8 +1453,10 @@ app.registerExtension({
                 this.embeddedDiv.style.width = "100%";
                 this.embeddedDiv.style.maxWidth = "none";
                 this.embeddedDiv.style.boxSizing = "border-box";
-                if (this._mplDomWidget && this.size?.[0]) {
-                    this._mplDomWidget.width = this.size[0];
+                // 关键：不要钉死 widget.width。前端用 (widget.width ?? node.width)，
+                // 有值就锁死、界面无法跟随节点拉宽；置空才能始终按节点宽度铺满。
+                if (this._mplDomWidget) {
+                    this._mplDomWidget.width = null;
                 }
                 // The frontend positions DOM widgets from node.size during
                 // the resize callback; saved workflows do not always invoke
@@ -1352,8 +1484,12 @@ app.registerExtension({
                 if (!this._mplResizeObserver && typeof ResizeObserver !== "undefined" && this.embeddedDiv) {
                     try {
                         this._mplResizeObserver = new ResizeObserver(() => {
-                            const w = this.embeddedDiv ? this.embeddedDiv.clientWidth : 0;
-                            if (this.size?.[0] && w !== this.size[0]) {
+                            if (!this.size?.[0]) return;
+                            // 前端按 (widget.width ?? node.width) 算界面宽度。只要 widget.width
+                            // 有值，界面就被锁死、无法跟随节点；这里持续把它清空，确保界面
+                            // 永远按 node.width 铺满。若曾经被外部写入，也会被这里纠正。
+                            if (this._mplDomWidget && this._mplDomWidget.width != null) {
+                                this._mplDomWidget.width = null;
                                 this.setDirtyCanvas?.(true, true);
                             }
                         });
@@ -1938,6 +2074,161 @@ app.registerExtension({
                 mplSavePresetMeta().then(() => mplRefreshAllSidebars());
             };
 
+            // ===== LORA 串导入：<lora:名称:模型权重:CLIP权重> =====
+            // 解析后逐行显示「名字 + M/C 两个权重」，直接加入节点。
+            nodeType.prototype.showLoraStringModal = function() {
+                const old = document.querySelector(".mpl-lorastring-overlay");
+                if (old) old.remove();
+
+                const overlay = document.createElement("div");
+                overlay.className = "mpl-lorastring-overlay";
+                overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:10025;display:flex;align-items:center;justify-content:center;";
+                const dlg = document.createElement("div");
+                dlg.className = "mpl-lorastring-dialog";
+                dlg.style.cssText = "background:#1e1f26;border:1px solid #3b3d49;border-radius:12px;padding:18px 20px;width:min(780px,92vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(0,0,0,.65);color:#e8e8ee;font-size:13px;";
+                const head = document.createElement("div");
+                head.textContent = "LORA 串导入（模型权重 / CLIP 权重）";
+                head.style.cssText = "font-size:16px;font-weight:700;color:#f2f3f7;margin-bottom:12px;cursor:move;user-select:none;";
+                const body = document.createElement("div");
+                body.style.cssText = "min-height:0;display:flex;flex-direction:column;gap:10px;";
+
+                const tip = document.createElement("div");
+                tip.textContent = "整段粘贴 <lora:名称:模型权重:CLIP权重> 即可；名称会按本机 LoRA 文件自动补全路径。单击 M / C 可改权重。";
+                tip.style.cssText = "color:#929ca9;font-size:12px;line-height:1.5;";
+                body.appendChild(tip);
+
+                const ta = document.createElement("textarea");
+                ta.style.cssText = "width:100%;height:108px;resize:vertical;background:#15161c;border:1px solid #3b3d49;border-radius:8px;color:#dfe3f2;font:12px/1.6 Consolas,monospace;padding:10px;box-sizing:border-box;";
+                ta.placeholder = "<lora:wlop_c1-st4000:0.40:0.40> <lora:light_c1-st2000:0.40:1.00>";
+                body.appendChild(ta);
+
+                const nameRow = document.createElement("div");
+                nameRow.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
+                const nameLab = document.createElement("span");
+                nameLab.textContent = "预设名称";
+                nameLab.style.cssText = "color:#929ca9;";
+                const nameInput = document.createElement("input");
+                nameInput.type = "text";
+                nameInput.value = "LORA串";
+                nameInput.style.cssText = "flex:1;min-width:150px;background:#15161c;border:1px solid #3b3d49;border-radius:7px;color:#e8e8ee;padding:6px 9px;";
+                nameRow.append(nameLab, nameInput);
+                body.appendChild(nameRow);
+
+                const count = document.createElement("div");
+                count.style.cssText = "color:#9aa3b2;font-size:12px;";
+                body.appendChild(count);
+
+                const list = document.createElement("div");
+                list.style.cssText = "flex:1 1 auto;min-height:80px;max-height:38vh;overflow:auto;background:#16171d;border:1px solid #33353f;border-radius:8px;padding:6px;";
+                body.appendChild(list);
+
+                let parsed = [];
+                const render = () => {
+                    list.innerHTML = "";
+                    parsed.forEach((it) => {
+                        const row = document.createElement("div");
+                        row.style.cssText = "display:flex;align-items:center;gap:8px;padding:4px 6px;border-bottom:1px solid #282a33;";
+                        const chk = document.createElement("input");
+                        chk.type = "checkbox"; chk.checked = it.enabled;
+                        chk.addEventListener("pointerdown", e => e.stopPropagation());
+                        chk.onchange = () => { it.enabled = chk.checked; };
+                        const nm = document.createElement("span");
+                        nm.textContent = (it.name.split(/[/\\]/).pop() || it.name).replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|onnx)$/i, "");
+                        nm.title = it.name;
+                        nm.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:" + (it._found ? "#e8e8ee" : "#ef8a98") + ";";
+                        const mkWeight = (label, value, key, color) => {
+                            const el = document.createElement("span");
+                            el.className = "mpl-lorastring-weight";
+                            el.textContent = label + " " + Number(value).toFixed(2);
+                            el.title = key === "clipWeight"
+                                ? (mplClipFollowsWeight(it) ? "CLIP 跟随模型权重\n右键改为自定义" : "CLIP 自定义权重\n右键恢复跟随")
+                                : "单击修改模型权重";
+                            el.style.cssText = "color:" + color + ";min-width:60px;text-align:right;cursor:pointer;";
+                            el.onclick = () => {
+                                const v = prompt("输入" + (key === "weight" ? "模型" : "CLIP") + "权重：", value);
+                                if (v === null) return;
+                                if (key === "weight") {
+                                    const n = parseFloat(v);
+                                    if (!Number.isFinite(n)) return;
+                                    it.weight = mplClampWeight(n);
+                                    mplSyncClipWeight(it);
+                                } else {
+                                    mplSetCustomClipWeight(it, v);
+                                }
+                                render();
+                            };
+                            if (key === "clipWeight") {
+                                el.oncontextmenu = (e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    mplToggleClipFollow(it);
+                                    render();
+                                };
+                            }
+                            return el;
+                        };
+                        row.append(chk, nm,
+                            mkWeight("M", it.weight, "weight", "#9fc0ff"),
+                            mkWeight("C", it.clipWeight, "clipWeight", mplClipFollowsWeight(it) ? "#c6a9ff" : "#8fe3d2"));
+                        list.appendChild(row);
+                    });
+                    const ok = parsed.filter(x => x._found).length;
+                    count.textContent = "解析到 " + parsed.length + " 个 LoRA，本机定位 " + ok + " 个" +
+                        (parsed.length - ok ? "（未定位的会保留，加载时按缺失提示）" : "");
+                };
+                const parseAndRender = () => {
+                    parsed = mplParseLoraString(ta.value);
+                    render();
+                };
+                ta.addEventListener("input", parseAndRender);
+                parseAndRender();
+
+                const btns = document.createElement("div");
+                btns.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap;";
+                const mkBtn = (text, primary, fn) => {
+                    const b = document.createElement("button");
+                    b.type = "button"; b.textContent = text;
+                    b.style.cssText = "padding:7px 15px;border-radius:7px;border:1px solid " + (primary ? "#6c8cff" : "#3b3d49") +
+                        ";background:" + (primary ? "#6c8cff" : "#272932") + ";color:" + (primary ? "#fff" : "#d6d8e0") +
+                        ";cursor:pointer;font-size:12.5px;font-weight:600;";
+                    b.onclick = fn; return b;
+                };
+                const collect = () => {
+                    const items = parsed.filter(x => x.enabled).map(x => {
+                        const c = Object.assign({}, x);
+                        delete c._found;
+                        return mplDecorateNewLora(c);
+                    });
+                    if (!items.length) { alert("没有可加入的 LoRA"); return null; }
+                    return items;
+                };
+                const addToNode = (presetName, items) => {
+                    if (!this.loraData) this.loraData = { folders: [], loras: [] };
+                    if (!Array.isArray(this.loraData.folders)) this.loraData.folders = [];
+                    this.loraData.folders.push({ name: presetName, loras: items });
+                    this.renderEmbeddedList(); this.updateWidget();
+                };
+                btns.appendChild(mkBtn("取消", false, () => overlay.remove()));
+                btns.appendChild(mkBtn("加入节点", true, () => {
+                    const items = collect(); if (!items) return;
+                    addToNode(nameInput.value.trim() || "LORA串", items);
+                    overlay.remove();
+                }));
+                body.appendChild(btns);
+                dlg.append(head, body);
+                overlay.appendChild(dlg);
+                document.body.appendChild(overlay);
+                this.makeDialogDraggable(dlg, head);
+                ["pointerdown", "pointerup", "mousedown", "mouseup"].forEach(ev =>
+                    dlg.addEventListener(ev, e => e.stopPropagation()));
+                overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+                const onKey = (e) => {
+                    if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", onKey); }
+                };
+                document.addEventListener("keydown", onKey);
+                setTimeout(() => { try { ta.focus(); } catch (e) {} }, 100);
+            };
+
             nodeType.prototype._mplCategoryMenu = function(e, name, isCat) {
                 const idx = MPL_SIDEBAR.categories.indexOf(name);
                 const items = [{
@@ -2462,17 +2753,17 @@ app.registerExtension({
                     /* ===== 列对齐：仅名称弹性增长，其余控件固定宽度，使备注/权重/触发词/操作列在行间竖直对齐 ===== */
                     .mpl-lora-row { display: flex !important; align-items: center !important; }
                     .mpl-lora-row .mpl-drag-area { flex: 0 0 10px !important; width: 10px !important; min-width: 0 !important; }
-                    .mpl-lora-row .mpl-lora-name { flex: 1 1 auto !important; min-width: 0 !important; }
+                    .mpl-lora-row .mpl-lora-name { flex: 1 1 auto !important; min-width: 80px !important; }
                     /* 群组内名字右移一点，与群组标题文字对齐；群组外与缩略图稍微拉开空隙 */
                     .mpl-folder-row .mpl-lora-row .mpl-lora-name { margin-left: 6px !important; }
                     .mpl-lora-row.root-item .mpl-lora-name { margin-left: 5px !important; }
                     .mpl-lora-row .mpl-note-input {
-                        flex: 0 0 92px !important; width: 92px !important;
-                        max-width: 92px !important; min-width: 92px !important;
+                        flex: 0 1 92px !important; width: auto !important;
+                        max-width: 92px !important; min-width: 50px !important;
                     }
-                    .mpl-lora-row .mpl-weight-container { flex: 0 0 auto !important; min-width: 110px !important; }
-                    /* 箭头模式：数值区撑满容器，消除右侧留黑 */
-                    .mpl-lora-row .mpl-weight-container .mpl-weight-display { flex: 1 1 auto !important; min-width: 0 !important; }
+                    .mpl-lora-row .mpl-weight-container { flex: 0 0 auto !important; min-width: 104px !important; }
+                    /* 数值区固定宽度，负号不会挤动右侧 CLIP/按钮 */
+                    .mpl-lora-row .mpl-weight-container .mpl-weight-display { flex: 0 0 62px !important; width: 62px !important; min-width: 62px !important; text-align: center !important; }
                     .mpl-lora-row .mpl-trigger-btn {
                         flex: 0 0 60px !important; width: 60px !important;
                         max-width: 60px !important; box-sizing: border-box !important;
@@ -2705,14 +2996,16 @@ app.registerExtension({
                         transition: background .13s ease;
                     }
                     .mpl-btn-add:hover { background: #8098ff !important; }
-                    .mpl-btn-metadata, .mpl-btn-preset {
+                    .mpl-btn-metadata, .mpl-btn-preset, .mpl-btn-lorastring {
                         background: var(--ma-surface) !important;
                         border: 1px solid var(--ma-border) !important;
                         color: var(--ma-text) !important;
                         border-radius: 8px !important;
                         height: 30px !important;
+                        font-size: 12px !important;
+                        font-weight: 500 !important;
                     }
-                    .mpl-btn-metadata:hover, .mpl-btn-preset:hover {
+                    .mpl-btn-metadata:hover, .mpl-btn-preset:hover, .mpl-btn-lorastring:hover {
                         background: var(--ma-surface-raised) !important;
                         border-color: rgba(108,140,255,0.4) !important;
                     }
@@ -2767,8 +3060,12 @@ app.registerExtension({
                     /* 底部按钮：添加/预设/下载 更宽，颜色/设置 平分剩余 */
                     .mpl-footer .mpl-btn-add,
                     .mpl-footer .mpl-btn-preset,
-                    .mpl-footer .mpl-btn-metadata { flex: 1.7 1 0 !important; min-width: 0 !important; }
+                    .mpl-footer .mpl-btn-metadata,
+                    .mpl-footer .mpl-btn-lorastring { flex: 1.7 1 0 !important; min-width: 0 !important; }
                     .mpl-footer .mpl-btn-icon { flex: 1 1 0 !important; min-width: 0 !important; }
+                    /* LORA 串导入弹窗里的权重标签 */
+                    .mpl-lorastring-weight { cursor: pointer; font-family: Consolas, monospace; }
+                    .mpl-lorastring-weight:hover { filter: brightness(1.25); }
                     .mpl-footer button {
                         display: inline-flex !important;
                         align-items: center !important;
@@ -2905,6 +3202,21 @@ app.registerExtension({
 
             // --- 数据处理与渲染逻辑 ---
             nodeType.prototype.updateWidget = function() {
+                // 记住进入时的节点尺寸：本函数末尾会触发官方缺失模型扫描，
+                // 那条链可能重算并压缩节点；这里保证更新只增不减，并把 DOM 宽度钉回节点宽度。
+                const _mplSizeW = Array.isArray(this.size) ? Number(this.size[0]) : null;
+                const _mplSizeH = Array.isArray(this.size) ? Number(this.size[1]) : null;
+                const _mplRestoreSize = () => {
+                    if (!Array.isArray(this.size)) return;
+                    if (_mplSizeW !== null && Number.isFinite(_mplSizeW) && this.size[0] < _mplSizeW) {
+                        this.size[0] = _mplSizeW;
+                    }
+                    if (_mplSizeH !== null && Number.isFinite(_mplSizeH) && this.size[1] < _mplSizeH) {
+                        this.size[1] = _mplSizeH;
+                    }
+                    this._mplSyncDOMLayout?.();
+                };
+
                 // 数据入口统一规范化：无论哪条路径新增/改动 LoRA，写 prompt 前都补齐 enabled
                 mplNormalizeLoraData(this.loraData);
                 if (MPL_LAST_REPAIRS && mplIsDebugEnabled()) {
@@ -2989,19 +3301,29 @@ app.registerExtension({
                 mplUpdateMissingLoraState(this);
                 mplSyncModelValidationWidgets(this);
                 mplRefreshOfficialMissingModels();
+                // 立即 + 下一帧 + 稍后各恢复一次，覆盖同步/异步两条尺寸重算路径。
+                _mplRestoreSize();
+                requestAnimationFrame(_mplRestoreSize);
+                setTimeout(_mplRestoreSize, 80);
             };
 
-            // 旧工作流里保存的节点端口：新版本已去掉 clip 输入/输出。
-            // 加载旧图时前端会按保存的数据把旧端口恢复出来，这里按名称重建回当前定义。
+            // 端口定义以当前节点为准：本版本恢复了 clip 输入/输出（CLIP 权重真正生效）。
+            // 旧工作流加载时前端会按保存的数据恢复旧端口，这里按名称重建回当前定义。
             nodeType.prototype._mplRepairLegacyPorts = function() {
                 if (!this.inputs) this.inputs = [];
-                for (let i = this.inputs.length - 1; i >= 0; i--) {
-                    if (this.inputs[i] && this.inputs[i].name === "clip") this.removeInput(i);
+                // 确保 clip 输入存在（旧图保存时可能没有该端口）。
+                // addInput 第三参在新版前端是 options 对象，这里只用两参数追加到末尾；
+                // 输入按 name 连线和执行，顺序无关。
+                if (!this.inputs.some(i => i && i.name === "clip")) {
+                    if (typeof this.addInput === "function") {
+                        this.addInput("clip", "CLIP");
+                    }
                 }
                 const canonical = [
                     ["model", "MODEL"],
                     ["触发词输出", "STRING"],
                     ["lora串输出", "MAGIC_LORA_CHAIN"],
+                    ["clip", "CLIP"],
                 ];
                 if (!Array.isArray(this.outputs)) return;
                 const same = this.outputs.length === canonical.length
@@ -6078,6 +6400,13 @@ app.registerExtension({
                 noteInput.addEventListener("pointerdown", (e)=>e.stopPropagation());
                 noteInput.addEventListener("mousedown", (e)=>e.stopPropagation());
 
+                let clipBadge = null;
+                const refreshClipBadge = () => mplUpdateClipBadgeUI(clipBadge, lora);
+                const syncClipWithWeight = () => {
+                    mplSyncClipWeight(lora);
+                    refreshClipBadge();
+                };
+
                 // 权重调节器（带左右箭头按钮）
                 const weightContainer = document.createElement("div");
                 weightContainer.className = "mpl-weight-container";
@@ -6109,6 +6438,7 @@ app.registerExtension({
                 decreaseBtn.onclick = (e) => {
                     e.stopPropagation();
                     lora.weight = Math.max(-10, parseFloat((lora.weight - 0.01).toFixed(2)));
+                    syncClipWithWeight();
                     weightDisplay.textContent = lora.weight.toFixed(2);
                     this.updateWidget();
                 };
@@ -6141,6 +6471,7 @@ app.registerExtension({
                         const numVal = parseFloat(newVal);
                         if (!isNaN(numVal)) {
                             lora.weight = Math.max(-10, Math.min(10, numVal));
+                            syncClipWithWeight();
                             weightDisplay.textContent = lora.weight.toFixed(2);
                             this.updateWidget();
                         }
@@ -6166,6 +6497,7 @@ app.registerExtension({
                 increaseBtn.onclick = (e) => {
                     e.stopPropagation();
                     lora.weight = Math.min(10, parseFloat((lora.weight + 0.01).toFixed(2)));
+                    syncClipWithWeight();
                     weightDisplay.textContent = lora.weight.toFixed(2);
                     this.updateWidget();
                 };
@@ -6198,6 +6530,7 @@ app.registerExtension({
                     const applySliderWeight = (newVal) => {
                         const clamped = Math.max(sliderMin, Math.min(sliderMax, newVal));
                         lora.weight = parseFloat(clamped.toFixed(2));
+                        syncClipWithWeight();
                         updateSliderUI();
                         this.updateWidget();
                     };
@@ -6410,7 +6743,7 @@ app.registerExtension({
                     e.stopPropagation();
                     if (e.target === noteInput || 
                         e.target === weightContainer || e.target.closest('.mpl-weight-container') ||
-                        e.target === tagBtn || e.target === editBtn || e.target === del ||
+                        e.target === clipBadge || e.target === tagBtn || e.target === editBtn || e.target === del ||
                         (typeof decreaseBtn !== 'undefined' && e.target === decreaseBtn) || (typeof increaseBtn !== 'undefined' && e.target === increaseBtn) || (typeof weightDisplay !== 'undefined' && e.target === weightDisplay)) {
                         e.preventDefault();
                         return false;
@@ -6423,13 +6756,37 @@ app.registerExtension({
                 tagBtn.addEventListener("dragstart", preventDrag);
                 editBtn.addEventListener("dragstart", preventDrag);
                 del.addEventListener("dragstart", preventDrag);
-                
+
+                // CLIP 权重默认跟随模型权重；右键切换自定义/跟随
+                mplSyncClipWeight(lora);
+                clipBadge = document.createElement("div");
+                clipBadge.className = "mpl-lora-clip-weight";
+                mplUpdateClipBadgeUI(clipBadge, lora);
+                clipBadge.onclick = (e) => {
+                    e.stopPropagation();
+                    const v = prompt("输入自定义 CLIP 权重：", lora.clipWeight);
+                    if (v !== null && mplSetCustomClipWeight(lora, v)) {
+                        refreshClipBadge();
+                        this.updateWidget();
+                    }
+                };
+                clipBadge.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    mplToggleClipFollow(lora);
+                    refreshClipBadge();
+                    this.updateWidget();
+                };
+                clipBadge.addEventListener("pointerdown", e => e.stopPropagation());
+                clipBadge.addEventListener("mousedown", e => e.stopPropagation());
+                clipBadge.addEventListener("dragstart", preventDrag);
+
                 // 操作按钮组
                 const actions = document.createElement("div");
                 actions.className = "mpl-lora-actions";
                 actions.append(tagBtn, editBtn, del);
 
-                row.append(thumb, name, dragArea, noteInput, weightContainer, actions);
+                row.append(thumb, name, dragArea, noteInput, weightContainer, ...(clipBadge ? [clipBadge] : []), actions);
 
                 // 右键上下文菜单：替换 LoRA / 复制 / 组成文件夹 / 爬取信息 / 颜色 / 删除
                 row.oncontextmenu = (e) => {

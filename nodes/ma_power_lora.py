@@ -542,6 +542,7 @@ class MAPowerLoraLoader:
             },
             "optional": {
                 "model": ("MODEL",),
+                "clip": ("CLIP",),
                 "lora串接受": ("MAGIC_LORA_CHAIN",),
             },
             "hidden": {
@@ -558,8 +559,8 @@ class MAPowerLoraLoader:
             }
         }
 
-    RETURN_TYPES = ("MODEL", "STRING", "MAGIC_LORA_CHAIN")
-    RETURN_NAMES = ("model", "触发词输出", "lora串输出")
+    RETURN_TYPES = ("MODEL", "STRING", "MAGIC_LORA_CHAIN", "CLIP")
+    RETURN_NAMES = ("model", "触发词输出", "lora串输出", "clip")
     FUNCTION = "apply_loras"
     CATEGORY = "✨ Magic Assistant"
 
@@ -704,7 +705,7 @@ class MAPowerLoraLoader:
         except Exception:
             return None
 
-    def apply_loras(self, lora_stack, model=None, adaptive_mode=False, sdnq_mode="none", klein_mode="auto", anima_mode="none", **kwargs):
+    def apply_loras(self, lora_stack, model=None, clip=None, adaptive_mode=False, sdnq_mode="none", klein_mode="auto", anima_mode="none", **kwargs):
         """
         应用 LoRA
         sdnq_mode: "none" (默认), "sdnq" (SDNQ 模式，用于 DiffusionPipeline)
@@ -810,12 +811,15 @@ class MAPowerLoraLoader:
         # ---------- 非链末端：只传出 lora 串，不加载；不要求 model ----------
         if not chain_end:
             print(f"⏭️ [MagicPowerLora] {node_tag}非链末端：本节点 {len(own_items)} 个 LoRA 不在此节点加载，交由下游加载器处理（共 {len(merged)} 个）")
-            return (model, "", lora_chain_out)
+            # 非链末端：model / clip 原样透传给下游，不在此节点 patch。
+            return (model, "", lora_chain_out, clip)
 
         # ---------- 链末端：必须连接 model ----------
         if model is None:
             raise RuntimeError("链末端节点（未将 lora串输出 接到其他加载器的节点）必须连接 model。")
         out_model = model
+        # clip 是可选端口：没接时保持 None，加载函数会安全跳过 CLIP patch。
+        out_clip = clip
         active_tags = []
 
         items_to_process = merged  # 末端用合并后的整链列表加载
@@ -866,7 +870,7 @@ class MAPowerLoraLoader:
         # 如果没有LoRA需要加载，直接返回（不做任何加载尝试）
         if not items_to_process:
             print(f"🚀 [MagicPowerLora] {node_tag}链末端：无 LoRA 需要加载")
-            return (out_model, "", lora_chain_out)
+            return (out_model, "", lora_chain_out, clip)
         
         print(f"🚀 [MagicPowerLora] {node_tag}链末端：加载 {len(items_to_process)} 个 LoRA（含串接）... (Mode: {mode_str}{adaptive_str})")
 
@@ -1027,6 +1031,10 @@ class MAPowerLoraLoader:
             for item in items_to_process:
                 lora_name = item.get("name")
                 weight = float(item.get("weight", 1.0))
+                # LORA 串携带独立的 CLIP 权重；本节点已有 CLIP 端口，此处按该权重
+                # 真正应用到文本编码器（与官方 LoraLoader 的 strength_clip 一致）。
+                # 未接 CLIP 端口时 out_clip=None，load_lora_for_models 会安全跳过 CLIP patch。
+                clip_weight = float(item.get("clipWeight", weight))
                 if not lora_name: continue
 
                 lora_path = folder_paths.get_full_path("loras", lora_name)
@@ -1037,10 +1045,11 @@ class MAPowerLoraLoader:
                 try:
                     # 使用缓存加载 LoRA（与官方 LoraLoader 同步：带回 lora_metadata）
                     lora, lora_metadata = MAPowerLoraLoader._get_cached_lora(lora_path, weight)
-                    out_model, _ = comfy.sd.load_lora_for_models(
-                        out_model, None, lora, weight, weight, lora_metadata=lora_metadata
+                    # 与 model 一样逐条累积：每条 LoRA 的 CLIP patch 叠加上一条的结果。
+                    out_model, out_clip = comfy.sd.load_lora_for_models(
+                        out_model, out_clip, lora, weight, clip_weight, lora_metadata=lora_metadata
                     )
-                    print(f"   ✅ Applied: {lora_name} (weight={weight})")
+                    print(f"   ✅ Applied: {lora_name} (weight={weight}, clipWeight={clip_weight})")
                     # 触发词开关独立生效，但只在 LoRA 真正加载成功后才输出
                     if _trigger_enabled(item) and item.get("tags"):
                         active_tags.append(str(item["tags"]))
@@ -1052,7 +1061,7 @@ class MAPowerLoraLoader:
         # 执行完成后清理未使用的 LoRA 缓存，释放内存
         MAPowerLoraLoader._cleanup_unused_lora_cache()
         
-        return (out_model, final_text, lora_chain_out)
+        return (out_model, final_text, lora_chain_out, out_clip)
 
 # --- API 接口 ---
 
