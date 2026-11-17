@@ -36,7 +36,7 @@ English: [README.md](README.md)
 
 ## 致谢
 
-本插件是在 [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant.git) 的基础上修改而来。特别感谢作者 **shigjfg** 提供的基础工作。同时感谢群友 **you** 参与修复、增添功能并提出改进建议。
+本插件是在 [ComfyUI-ZML-Image](https://github.com/zml-w/ComfyUI-ZML-Image)（基础作者：[**zml-w**](https://github.com/zml-w)）和 [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant)（基础作者：[**shigjfg**](https://github.com/shigjfg)）的基础上修改而来。特别感谢以上作者提供的基础工作。同时感谢群友 **you** 参与修复、增添功能并提出改进建议。
 
 ## 功能
 

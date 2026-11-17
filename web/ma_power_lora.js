@@ -1416,7 +1416,8 @@ app.registerExtension({
                 if(this.embeddedDiv) return;
 
                 this.embeddedDiv = document.createElement("div");
-                this.embeddedDiv.className = "mpl-embedded-container";
+                this.embeddedDiv.className = "mpl-embedded-container notranslate";
+                this.embeddedDiv.setAttribute("translate", "no");
                 
                 // 🛑 核心修复：全域事件拦截 🛑
                 // 必须配合 CSS 中的 pointer-events: auto 才能生效
@@ -2925,18 +2926,40 @@ app.registerExtension({
                         font-weight: 600 !important;
                     }
                     /* 让名称占更多空间，压缩备注/权重区 */
-                    .mpl-lora-row .mpl-note-input { max-width: 120px !important; flex: 0 1 120px !important; min-width: 50px !important; }
-                    .mpl-lora-name { flex: 1 1 auto !important; min-width: 60px !important; }
+                    .mpl-lora-row .mpl-note-input { max-width: 92px !important; flex: 0 0 92px !important; min-width: 92px !important; }
+                    .mpl-lora-name { flex: 1 1 0 !important; min-width: 60px !important; }
                     /* ===== 列对齐：仅名称弹性增长，其余控件固定宽度，使备注/权重/触发词/操作列在行间竖直对齐 ===== */
                     .mpl-lora-row { display: flex !important; align-items: center !important; }
                     .mpl-lora-row .mpl-drag-area { flex: 0 0 10px !important; width: 10px !important; min-width: 0 !important; }
-                    .mpl-lora-row .mpl-lora-name { flex: 1 1 auto !important; min-width: 80px !important; }
+                    .mpl-lora-row .mpl-lora-name { flex: 1 1 0 !important; min-width: 80px !important; }
+                    .mpl-lora-name::before {
+                        content: attr(data-display-name);
+                        display: block;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }
+                    .mpl-trigger-btn::before {
+                        content: attr(data-label);
+                        display: block;
+                        width: 100%;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }
+                    .mpl-trigger-word-label::before {
+                        content: attr(data-label);
+                        display: block;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }
                     /* 群组内名字右移一点，与群组标题文字对齐；群组外与缩略图稍微拉开空隙 */
                     .mpl-folder-row .mpl-lora-row .mpl-lora-name { margin-left: 6px !important; }
                     .mpl-lora-row.root-item .mpl-lora-name { margin-left: 5px !important; }
                     .mpl-lora-row .mpl-note-input {
-                        flex: 0 1 92px !important; width: auto !important;
-                        max-width: 92px !important; min-width: 50px !important;
+                        flex: 0 0 92px !important; width: 92px !important;
+                        max-width: 92px !important; min-width: 92px !important;
                     }
                     .mpl-lora-row .mpl-weight-container { flex: 0 0 auto !important; min-width: 104px !important; }
                     /* 数值区固定宽度，负号不会挤动右侧 CLIP/按钮 */
@@ -6306,7 +6329,7 @@ app.registerExtension({
                     rows.forEach(row => {
                         // 通过查找包含lora名称的元素来匹配
                         const nameElement = row.querySelector('.mpl-lora-name');
-                        if (nameElement && (nameElement.textContent.includes(loraName.split(/[/\\]/).pop()) || nameElement.title === loraName)) {
+                        if (nameElement && (nameElement.dataset.lora === loraName || nameElement.title === loraName)) {
                             // 如果该行有预览图，刷新它
                             const previewDiv = row.querySelector('.mpl-lora-preview');
                             if (previewDiv) {
@@ -6689,10 +6712,12 @@ app.registerExtension({
 
                 // 箭头占位已去掉：行内排序拖拽由名字与空白区承担
                 const name = document.createElement("div");
-                name.className = "mpl-lora-name";
+                name.className = "mpl-lora-name notranslate";
+                name.setAttribute("translate", "no");
                 // 提取文件名（隐藏路径），保留完整路径在title中
                 const displayName = (lora.name.split(/[/\\]/).pop() || lora.name).replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|onnx)$/i, "");
-                name.textContent = displayName;
+                name.dataset.displayName = displayName;
+                name.setAttribute("aria-label", displayName);
                 name.dataset.lora = lora.name;
                 mplDecorateName(name, lora.name);
                 // name区域也可以拖拽
@@ -7049,7 +7074,8 @@ app.registerExtension({
 
                 // 触发词按钮：独立开关，只控制触发词是否输出，不影响 LoRA 是否加载
                 const tagBtn = document.createElement("button");
-                tagBtn.className = "mpl-trigger-btn";
+                tagBtn.className = "mpl-trigger-btn notranslate";
+                tagBtn.setAttribute("translate", "no");
                 const _rawTrigText = String(lora.tags || lora.triggerWords || "").trim();
                 const _trigWords = mplSplitTriggerWords(_rawTrigText);
                 const _activeTrigWords = _trigWords.filter(w => !mplTriggerEffectivelyDisabled(lora, w));
@@ -7057,8 +7083,12 @@ app.registerExtension({
                 const _trigOn = lora.triggerEnabled !== false;
                 const _trigOffCount = _trigWords.filter(w => mplTriggerEffectivelyDisabled(lora, w)).length;
                 const _trigPartial = _trigWords.length >= 2 && _trigOffCount > 0 && _trigOffCount < _trigWords.length;
+                tagBtn.dataset.label = "";
+                tagBtn.setAttribute("aria-label", "");
                 if (_activeTrigWords.length) {
-                    tagBtn.textContent = _trigText.length > 12 ? _trigText.slice(0, 12) + "…" : _trigText;
+                    const label = _trigText.length > 12 ? _trigText.slice(0, 12) + "…" : _trigText;
+                    tagBtn.dataset.label = label;
+                    tagBtn.setAttribute("aria-label", label);
                     if (_trigWords.length >= 2) {
                         const state = _trigPartial ? `部分屏蔽 ${_trigOffCount}/${_trigWords.length}` : "全部启用";
                         tagBtn.title = `【触发词${state}】${_trigText}\n右键选择全部屏蔽或单项屏蔽`;
@@ -7066,11 +7096,9 @@ app.registerExtension({
                         tagBtn.title = `【触发词开】${_trigText}\n右键切换触发词开/关`;
                     }
                 } else if (_trigWords.length) {
-                    tagBtn.textContent = "";
                     tagBtn.title = `【触发词全部屏蔽】${_trigWords.length} 个已隐藏\n右键选择单项启用或全部启用`;
                 } else {
                     // 没有触发词时留空框占位，不显示「触发词」文字；爬取到信息后自动同步
-                    tagBtn.textContent = "";
                     tagBtn.classList.add("mpl-trigger-empty");
                     tagBtn.title = "暂无触发词（爬取信息后自动同步）\n右键切换开/关";
                 }
@@ -7892,9 +7920,12 @@ app.registerExtension({
                         this.updateWidget();
                     };
                     const txt = document.createElement("span");
-                    txt.textContent = word;
+                    txt.className = "mpl-trigger-word-label notranslate";
+                    txt.dataset.label = word;
+                    txt.setAttribute("translate", "no");
+                    txt.setAttribute("aria-label", word);
                     txt.title = word;
-                    txt.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+                    txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
                     row.append(cb, txt);
                     menu.appendChild(row);
                 });

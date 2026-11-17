@@ -36,7 +36,7 @@ Only notable changes are listed here; minor visual or text tweaks are omitted.
 
 ## Credits
 
-This plugin is based on and modified from [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant.git) by **shigjfg**. Special thanks to the original author for the work this plugin is built on. Thanks also to group friend **you** for contributing fixes, new features, and improvement suggestions.
+This plugin is based on and modified from [ComfyUI-ZML-Image](https://github.com/zml-w/ComfyUI-ZML-Image) by original author [**zml-w**](https://github.com/zml-w), and [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant) by original author [**shigjfg**](https://github.com/shigjfg). Special thanks to both original authors for the work this plugin is built on. Thanks also to group friend **you** for contributing fixes, new features, and improvement suggestions.
 
 ## Features
 
