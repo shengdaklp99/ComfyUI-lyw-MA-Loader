@@ -4,6 +4,26 @@ ComfyUI 的独立可视化 LoRA 加载器：把 LoRA 编成群组、管理预设
 
 English: [README.md](README.md)
 
+## 更新介绍
+
+这里只记录重要更新，颜色、文案等小改动不写入。
+
+### 1.0.4
+
+- 设置里新增预设与收藏的导入/导出
+- 触发词开关改为右键；多触发词可逐项屏蔽，按钮只预览已启用的词
+- 文件夹忽略改为独立眼睛按钮，左键标题改为折叠/展开
+- CLIP 权重支持跟随模型权重或独立自定义
+- 新增当前工作流全部 LoRA 的一键补全
+- 文件夹右键新增「保存为预设组」
+- LoRA 添加窗口新增目标群组选择
+- 新增布局守护，节点拉宽后内嵌面板不再被压窄
+- 布局设置新增「隐藏 CLIP 权重列」选项
+
+### 1.0.3
+
+- 首次发布到 ComfyUI Registry，包含群组、预设、Civitai 信息、Lora Manager 互通、颜色、链式输出和多语言等主要功能
+
 **主节点界面**
 
 ![lyw-MA加载器节点](docs/preview-node.png)
@@ -16,7 +36,7 @@ English: [README.md](README.md)
 
 ## 致谢
 
-本插件是在 [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant.git) 的基础上修改而来。特别感谢作者 **shigjfg** 提供的基础工作。
+本插件是在 [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant.git) 的基础上修改而来。特别感谢作者 **shigjfg** 提供的基础工作。同时感谢群友 **you** 参与修复、增添功能并提出改进建议。
 
 ## 功能
 
@@ -117,26 +137,6 @@ git clone https://github.com/shengdaklp99/ComfyUI-lyw-MA-Loader.git
 - **英文系统下节点标题仍是中文**：ComfyUI 在启动时缓存 `/i18n`，重启 ComfyUI 后强制刷新浏览器（Ctrl+Shift+R）
 - **排队时报 "Missing LoRA file(s)"**：工作流引用的模型已被删除，节点会在执行前校验
 - **预览图不显示**：先跑一次信息管理，或确认预览文件与模型放在同一目录
-
-## 更新介绍
-
-这里只记录重要更新，颜色、文案等小改动不写入。
-
-### 1.0.4
-
-- 设置里新增预设与收藏的导入/导出
-- 触发词开关改为右键；多触发词可逐项屏蔽，按钮只预览已启用的词
-- 文件夹忽略改为独立眼睛按钮，左键标题改为折叠/展开
-- CLIP 权重支持跟随模型权重或独立自定义
-- 新增当前工作流全部 LoRA 的一键补全
-- 文件夹右键新增「保存为预设组」
-- LoRA 添加窗口新增目标群组选择
-- 新增布局守护，节点拉宽后内嵌面板不再被压窄
-- 布局设置新增「隐藏 CLIP 权重列」选项
-
-### 1.0.3
-
-- 首次发布到 ComfyUI Registry，包含群组、预设、Civitai 信息、Lora Manager 互通、颜色、链式输出和多语言等主要功能
 
 ## 参与
 
