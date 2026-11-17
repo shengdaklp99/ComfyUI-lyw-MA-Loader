@@ -456,6 +456,26 @@ def _trigger_enabled(item):
     return value is not False
 
 
+def _active_trigger_text(item):
+    """按行开关与单项屏蔽列表过滤后，实际要输出的触发词文本。"""
+    if not _trigger_enabled(item):
+        return ""
+    text = str(item.get("tags") or item.get("triggerWords") or "").strip()
+    if not text:
+        return ""
+    disabled = item.get("triggerDisabled")
+    if not isinstance(disabled, list) or not disabled:
+        return text
+    disabled_norm = {str(x).strip().casefold() for x in disabled if str(x).strip()}
+    if not disabled_norm:
+        return text
+    parts = [part.strip() for part in re.split(r"[\r\n,，;；]+", text) if part.strip()]
+    if not parts:
+        return text
+    kept = [part for part in parts if part.casefold() not in disabled_norm]
+    return ", ".join(kept)
+
+
 CHAIN_LOADER_TYPES = ("MAPowerLoraLoader", "MagicPowerLoraLoader")
 
 
@@ -925,8 +945,9 @@ class MAPowerLoraLoader:
                 if klein_applied:
                     # 触发词开关独立生效，但只在 LoRA 真正加载成功后才输出
                     for _path, _weight, _name, _item in klein_loras:
-                        if _trigger_enabled(_item) and _item.get("tags"):
-                            active_tags.append(str(_item["tags"]))
+                        active_text = _active_trigger_text(_item)
+                        if active_text:
+                            active_tags.append(active_text)
             elif wrapper is not None:
                 print(f"   ℹ️ [Klein] No valid LoRA to apply")
 
@@ -1001,8 +1022,9 @@ class MAPowerLoraLoader:
                             print(f"   ❌ Failed (SDNQ): {lora_name}")
                             traceback.print_exc()
                             continue
-                        if _trigger_enabled(item) and "tags" in item and item.get("tags"):
-                            active_tags.append(str(item["tags"]))
+                        active_text = _active_trigger_text(item)
+                        if active_text:
+                            active_tags.append(active_text)
                     if lora_adapters:
                         try:
                             pipeline.set_adapters(lora_adapters, adapter_weights=lora_weights)
@@ -1051,8 +1073,9 @@ class MAPowerLoraLoader:
                     )
                     print(f"   ✅ Applied: {lora_name} (weight={weight}, clipWeight={clip_weight})")
                     # 触发词开关独立生效，但只在 LoRA 真正加载成功后才输出
-                    if _trigger_enabled(item) and item.get("tags"):
-                        active_tags.append(str(item["tags"]))
+                    active_text = _active_trigger_text(item)
+                    if active_text:
+                        active_tags.append(active_text)
                 except Exception as e:
                     print(f"   ❌ Failed: {lora_name} -> {e}")
 
