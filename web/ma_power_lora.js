@@ -517,8 +517,26 @@ function mplDecorateAllNames() {
 function mplDecorateNewLora(l) {
     if (!l) return l;
     if (!l.note) l.note = mplNoteFor(l.name) || "";
-    if (String(l.tags || "").trim()) l.triggerWords = l.tags;
+    const key = mplMetadataNameKey(l.name);
+    let info = mplLmEntry(l.name);
+    if (!info || !Object.keys(info).length) info = MPL_LM.info?.[l.name] || MPL_LM.info?.[key] || null;
+    if (!info && MPL_LM.info) {
+        for (const [name, entry] of Object.entries(MPL_LM.info)) {
+            if (mplMetadataNameKey(name) === key) { info = entry; break; }
+        }
+    }
+    const infoWords = String(info?.trigger_words || info?.triggerWords || "").trim();
+    if (!String(l.tags || "").trim() && !String(l.triggerWords || "").trim() && infoWords) {
+        l.tags = infoWords;
+        l.triggerWords = infoWords;
+    } else if (String(l.tags || "").trim()) l.triggerWords = l.tags;
     else if (String(l.triggerWords || "").trim()) l.tags = l.triggerWords;
+    const rec = Number(info?.recommended_weight);
+    if ((l.recommendedWeight === undefined || l.recommendedWeight === null) &&
+        Number.isFinite(rec) && rec > 0 && rec <= 1) {
+        l.recommendedWeight = rec;
+        l.recommendedWeightSource = info?.recommended_weight_source || "作者推荐";
+    }
     return l;
 }
 void mplLoadExtraInfo();
@@ -930,16 +948,26 @@ function mplApplyMetadataData(node, name, data) {
     const key = mplMetadataNameKey(name);
     let changed = false;
     const incoming = typeof data?.triggerWords === "string" ? data.triggerWords.trim() : "";
-    if (!incoming) return false;
+    const recWeight = (typeof data?.recommendedWeight === "number" && data.recommendedWeight > 0 && data.recommendedWeight <= 1)
+        ? data.recommendedWeight : null;
+    const recSource = typeof data?.recommendedWeightSource === "string" ? data.recommendedWeightSource : "";
+    if (!incoming && recWeight === null) return false;
     const items = [
         ...(node?.loraData?.loras || []),
         ...(node?.loraData?.folders || []).flatMap(folder => folder?.loras || []),
     ];
     for (const item of items) {
         if (mplMetadataNameKey(item?.name) !== key) continue;
-        if (String(item.tags || "") === incoming && String(item.triggerWords || "") === incoming) continue;
-        mplSetTriggerWords(item, incoming);
-        changed = true;
+        let itemChanged = false;
+        if (incoming && (String(item.tags || "") !== incoming || String(item.triggerWords || "") !== incoming)) {
+            mplSetTriggerWords(item, incoming);
+            itemChanged = true;
+        }
+        if (recWeight !== null) {
+            if (item.recommendedWeight !== recWeight) { item.recommendedWeight = recWeight; itemChanged = true; }
+            if (item.recommendedWeightSource !== recSource) { item.recommendedWeightSource = recSource; itemChanged = true; }
+        }
+        if (itemChanged) changed = true;
     }
     return changed;
 }
@@ -967,6 +995,7 @@ const MPL_METADATA_SETTLED_STATES = ["not_found", "unavailable", "unresolved", "
 function mplMetadataAllSettled(name, settings, metadata = {}, fieldStates = {}) {
     const types = mplMetadataTypes(settings);
     if (!types.length) return false;
+    if (mplMetadataRecNeeded(name, settings, metadata)) return false;
     let hasSettled = false;
     const done = types.every(type => {
         const state = mplMetadataFieldState(name, type, metadata, fieldStates).state;
@@ -1018,12 +1047,23 @@ function mplMetadataHasLm(name, metadata) {
     return !!(metadata && metadata[mplMetadataNameKey(name)]?.lm);
 }
 
+function mplMetadataHasRec(name, metadata) {
+    const value = metadata?.[mplMetadataNameKey(name)]?.recommended_weight;
+    return typeof value === "number" && value > 0;
+}
+
+function mplMetadataRecNeeded(name, settings, metadata) {
+    const entry = metadata?.[mplMetadataNameKey(name)];
+    if (settings.download_rec === false || !entry || mplMetadataHasRec(name, metadata)) return false;
+    return entry.recommended_weight_available === true;
+}
+
 function mplMetadataNeeds(name, settings, metadata, fieldStates = {}) {
     // 以 Lora Manager 是否已有完整记录为准；「更新已有信息」模式下全部可选
     if (settings.update_existing) return true;
     // 已确认拿不到信息的单独归类，补全时不再纳入
     if (settings.force_refresh !== true && mplMetadataAllSettled(name, settings, metadata, fieldStates)) return false;
-    return !mplMetadataHasLm(name, metadata);
+    return !mplMetadataHasLm(name, metadata) || mplMetadataRecNeeded(name, settings, metadata);
 }
 
 function mplMetadataFailureDetails(result, typeLabels) {
@@ -1120,7 +1160,8 @@ async function mplRunMetadataQueue(names, settings, state, onProgress, metadata 
             if (state.cancelRequested || stopped) return;
             onProgress({ current: name, completed, total: names.length });
             let result;
-            const requestedTypes = mplMetadataRequestedTypes(name, settings, metadata, fieldStates);
+            let requestedTypes = mplMetadataRequestedTypes(name, settings, metadata, fieldStates);
+            if (!requestedTypes.length && mplMetadataRecNeeded(name, settings, metadata)) requestedTypes = ["rec"];
             if (!requestedTypes.length) { completed++; return; }
             try {
                 const response = await api.fetchApi("/malora/lora/fetch_metadata", {
@@ -1128,7 +1169,10 @@ async function mplRunMetadataQueue(names, settings, state, onProgress, metadata 
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         lora_name: name,
-                        options: Object.fromEntries(["txt", "json", "image"].map(type => [`download_${type}`, requestedTypes.includes(type)])),
+                        options: {
+                            ...Object.fromEntries(["txt", "json", "image"].map(type => [`download_${type}`, requestedTypes.includes(type)])),
+                            download_rec: settings.download_rec !== false,
+                        },
                         save_path_mode: settings.save_path,
                         overwrite: settings.overwrite === true,
                         force_refresh: settings.force_refresh === true,
@@ -1344,6 +1388,7 @@ app.registerExtension({
                         showWeightValue: true,
                         snapToZero: true,
                         hideClip: false,
+                        hideRecWeight: false,
                     };
                     this.layoutSettings = (saved && typeof saved === "object")
                         ? Object.assign({}, defaults, saved)
@@ -2969,6 +3014,17 @@ app.registerExtension({
                         max-width: 60px !important; box-sizing: border-box !important;
                         text-align: center !important;
                     }
+                    .mpl-lora-row .mpl-lora-rec-weight,
+                    .mpl-lora-row .mpl-lora-rec-weight-empty {
+                        flex: 0 0 48px !important; width: 48px !important;
+                        min-width: 48px !important; max-width: 48px !important;
+                        height: 22px !important; box-sizing: border-box !important;
+                        display: flex !important; align-items: center !important; justify-content: center !important;
+                        line-height: 1 !important; white-space: nowrap !important;
+                    }
+                    .mpl-lora-row .mpl-lora-rec-weight-empty {
+                        visibility: hidden !important; pointer-events: none !important;
+                    }
                     .mpl-lora-row .mpl-lora-actions { flex: 0 0 auto !important; margin-left: 4px !important; }
                     /* 备注输入：扁平化 */
                     .mpl-note-input, .mpl-mini-input {
@@ -3681,6 +3737,7 @@ app.registerExtension({
                     showWeightValue: true,
                     snapToZero: true,
                     hideClip: false,
+                    hideRecWeight: false,
                 };
                 if (this.properties["layout_settings"] && typeof this.properties["layout_settings"] === "object") {
                     this.layoutSettings = Object.assign({}, layoutDefaults, this.properties["layout_settings"]);
@@ -4997,9 +5054,15 @@ app.registerExtension({
                 addNodeBtn.onclick = () => {
                     if (!this.loraData) this.loraData = { loras: [], folders: [] };
                     if (!Array.isArray(this.loraData.loras)) this.loraData.loras = [];
-                    this.loraData.loras.push(mplDecorateNewLora({
+                    const newLora = mplDecorateNewLora({
                         name: loraName, weight: 1.0, enabled: true, tags: "", note: "", triggerWords: "",
-                    }));
+                    });
+                    const _addRec = Number(lmInfo.recommended_weight);
+                    if (Number.isFinite(_addRec) && _addRec > 0 && _addRec <= 1 && newLora.recommendedWeight === undefined) {
+                        newLora.recommendedWeight = _addRec;
+                        newLora.recommendedWeightSource = lmInfo.recommended_weight_source || "作者推荐";
+                    }
+                    this.loraData.loras.push(newLora);
                     this.renderEmbeddedList();
                     this.updateWidget();
                 };
@@ -5028,6 +5091,13 @@ app.registerExtension({
                     },
                 }));
                 body.appendChild(infoRow("基础模型", String(lmInfo.base_model || "").trim() || "—"));
+
+                const _infoRecW = Number(lmInfo.recommended_weight);
+                const _hasInfoRec = Number.isFinite(_infoRecW) && _infoRecW > 0 && _infoRecW <= 1;
+                body.appendChild(infoRow("推荐权重", _hasInfoRec ? "荐 " + _infoRecW.toFixed(2) : "—", {
+                    copy: false,
+                    title: _hasInfoRec ? `作者推荐权重 ${_infoRecW.toFixed(2)}（${lmInfo.recommended_weight_source || "作者推荐"}）` : "未找到作者推荐权重",
+                }));
 
                 // 触发词（可编辑）
                 const triggerInput = document.createElement("input");
@@ -5187,7 +5257,7 @@ app.registerExtension({
 
                 // 固定全量下载，不再给选项；信息与 Lora-Manager 互通，LM 已有信息会自动复用
                 const infoLine = document.createElement("div");
-                infoLine.textContent = "将补全触发词与预览图，保存到 LoRA 同目录；与 LoRA Manager 互通，已有信息不会重复下载。";
+                infoLine.textContent = "将补全触发词与预览图，并检测作者推荐权重，保存到 LoRA 同目录；与 LoRA Manager 互通，已有信息不会重复下载。";
                 infoLine.style.cssText = "font-size:12px;color:#9aa0b5;line-height:1.6;background:#191a20;border:1px solid #3a3a3a;border-radius:6px;padding:8px 10px;margin-bottom:20px;";
                 fetchDialog.appendChild(infoLine);
 
@@ -5226,13 +5296,9 @@ app.registerExtension({
 
                 fetchConfirmBtn.onclick = async () => {
                     const savePathMode = "same_dir";
-                    const options = { download_txt: true, download_image: true };
-                    let okCount = 0, failCount = 0, tagCount = 0, imgCount = 0;
+                    const options = { download_txt: true, download_image: true, download_rec: true };
+                    let okCount = 0, failCount = 0, tagCount = 0, recCount = 0, imgCount = 0;
                     const errs = [];
-                    const findLora = (name) => {
-                        const list = (this.loraData && this.loraData.loras) ? this.loraData.loras : [];
-                        return list.find(l => l && l.name === name);
-                    };
                     fetchConfirmBtn.disabled = true;
                     cancelFetchBtn.disabled = true;
                     fetchConfirmBtn.style.opacity = "0.6";
@@ -5258,13 +5324,13 @@ app.registerExtension({
                             if (!(response.ok || ['success','partial','skipped'].includes(rj && rj.status))) {
                                 throw new Error((rj && rj.message) || ('HTTP ' + response.status));
                             }
-                            // 用后端返回的 data 回填触发词
-                            const v = rj && rj.data ? rj.data.triggerWords : "";
-                            if (typeof v === "string" && v.trim()) {
-                                const lo = findLora(f);
-                                if (lo) mplSetTriggerWords(lo, v);
-                                tagCount++;
-                            }
+                            const data = (rj && rj.data) || {};
+                            const v = typeof data.triggerWords === "string" ? data.triggerWords.trim() : "";
+                            const rw = Number(data.recommendedWeight);
+                            const hasRec = Number.isFinite(rw) && rw > 0;
+                            if (v || hasRec) mplApplyMetadataData(this, f, data);
+                            if (v) tagCount++;
+                            if (hasRec) recCount++;
                             mplBumpImage(f);
                             if (this.refreshLoraImageCache) this.refreshLoraImageCache(f);
                             imgCount++;
@@ -5285,7 +5351,7 @@ app.registerExtension({
                     };
                     await Promise.all(Array.from({ length: Math.min(3, files.length) }, () => worker()));
                     statusLine.style.color = "#8b8d9b";
-                    statusLine.textContent = `完成：处理 ${okCount} 个（触发词 ${tagCount} 个、预览 ${imgCount} 个），失败 ${failCount} 个`;
+                    statusLine.textContent = `完成：处理 ${okCount} 个（触发词 ${tagCount} 个、推荐权重 ${recCount} 个、预览 ${imgCount} 个），失败 ${failCount} 个`;
                     if (failCount) alert(`部分失败：` + String.fromCharCode(10) + errs.join(String.fromCharCode(10)));
                     await mplLoadExtraInfo(true);
                     if (this.renderEmbeddedList) this.renderEmbeddedList();
@@ -5359,12 +5425,12 @@ app.registerExtension({
                 closeBtn.onclick = close;
 
                 const settings = {
-                    download_txt: true, download_json: true, download_image: true,
+                    download_txt: true, download_json: true, download_image: true, download_rec: true,
                     save_path: "same_dir", overwrite: true, update_existing: true, force_refresh: true,
                 };
                 const state = { running: false, cancelRequested: false, pauseResult: null };
                 stopBtn.onclick = () => { state.cancelRequested = true; stopBtn.disabled = true; stopBtn.textContent = "停止中…"; cur.textContent = "正在停止，等待当前文件完成…"; };
-                let filled = 0, notFound = 0, failed = 0;
+                let filled = 0, recFilled = 0, notFound = 0, failed = 0;
                 const affected = new Set(graphNodes);
                 try {
                     const results = await mplRunMetadataQueue(names, settings, state, ({ current, completed, total, result }) => {
@@ -5372,17 +5438,17 @@ app.registerExtension({
                         bar.style.width = Math.round(completed / Math.max(1, total) * 100) + "%";
                         if (result) {
                             const w = String(result.data?.triggerWords || "").trim();
-                            if (w) {
-                                filled++;
+                            const hasRec = typeof result.data?.recommendedWeight === "number" && result.data.recommendedWeight > 0;
+                            if (w || hasRec) {
+                                if (w) filled++;
+                                if (hasRec) recFilled++;
                                 for (const target of (nameToNodes.get(mplMetadataNameKey(result.name)) || [])) {
                                     if (mplApplyMetadataData(target, result.name, result.data)) affected.add(target);
                                 }
                                 try { mplBumpImage(result.name); } catch (e) {}
-                            } else if (result.status === "not_found" || result.field_states?.txt?.state === "not_found") {
-                                notFound++;
-                            } else if (result.status === "error") {
-                                failed++;
                             }
+                            if (result.status === "not_found" || result.field_states?.txt?.state === "not_found") notFound++;
+                            if (result.status === "error") failed++;
                         }
                     });
                     failed += results.filter(r => r.status === "error").length;
@@ -5402,7 +5468,7 @@ app.registerExtension({
                 bar.style.width = "100%";
                 bar.style.background = state.pauseResult ? "#EF6C00" : "#4CAF50";
                 const pauseNote = state.pauseResult ? "（来源请求受限，已暂停，可稍后重试）" : "";
-                stat.textContent = `完成：更新触发词 ${filled} 个 · 来源未找到 ${notFound} 个 · 失败 ${failed} 个 ${pauseNote}`;
+                stat.textContent = `完成：触发词 ${filled} 个 · 推荐权重 ${recFilled} 个 · 来源未找到 ${notFound} 个 · 失败 ${failed} 个 ${pauseNote}`;
                 cur.textContent = state.cancelRequested ? "已停止" : "已全部处理";
                 stopBtn.style.display = "none";
                 closeBtn.style.display = "inline-block";
@@ -5495,7 +5561,7 @@ app.registerExtension({
                 const workspace = el("div", "", "mpl-metadata-workspace", body);
                 const settingsPanel = el("div", "", "mpl-metadata-settings", workspace);
                 const typeLabels = { download_txt: "触发词 (.txt)", download_image: "预览图像" };
-                const fixedInfo = el("div", "触发词 (.txt) + 预览图像 固定全量下载；与 LoRA Manager 互通，已有信息不会重复下载。",
+                const fixedInfo = el("div", "触发词 (.txt) + 预览图像固定全量下载，并检测作者推荐权重；与 LoRA Manager 互通，已有信息不会重复下载。",
                     "mpl-metadata-hint", settingsPanel);
                 fixedInfo.style.cssText = "font-size:12px;color:#9aa0b5;line-height:1.6;";
                 const modeRow = el("label", "", "mpl-metadata-setting-group", settingsPanel);
@@ -5571,6 +5637,7 @@ app.registerExtension({
                 const readSettings = () => ({
                     download_txt: true,
                     download_image: true,
+                    download_rec: true,
                     save_path: "same_dir",
                     overwrite: modeSelect.value === "update",
                     update_existing: modeSelect.value === "update",
@@ -5807,6 +5874,16 @@ app.registerExtension({
                     name.textContent = result.name;
                     const message = el("div", "", "mpl-metadata-result-message", row);
                     message.textContent = result.message || "";
+                    const recW = result.data?.recommendedWeight;
+                    if (typeof recW === "number" && recW > 0) {
+                        const recLine = el("div", "", "mpl-metadata-result-message", row);
+                        recLine.style.color = "#81c784";
+                        recLine.textContent = `作者推荐权重 ${recW.toFixed(2)}${result.data?.recommendedWeightSource ? "（" + result.data.recommendedWeightSource + "）" : ""}，已保存到信息管理`;
+                    } else if (result.data?.recommendedWeightSkipped === true) {
+                        const recLine = el("div", "", "mpl-metadata-result-message", row);
+                        recLine.style.color = "#9aa0b5";
+                        recLine.textContent = "该项无作者推荐权重信息，已跳过";
+                    }
                     if (result.unavailable?.length) {
                         const unavailable = el("div", "", "mpl-metadata-result-message", row);
                         const explanations = { unavailable: "来源未提供", not_found: "未找到来源", unsupported: "不支持", unresolved: "未提取" };
@@ -5924,9 +6001,12 @@ app.registerExtension({
                             if (result) {
                                 mplMergeMetadataFieldStates(result.name, result, metadata, fieldStates, result.requested_types);
                                 // 空跑的「已跳过 / 无需重复处理」不写进结果列表，避免和补全结果混在一起
-                                const noopSkipped = result.status === "skipped" && !result.saved?.length && !(result.data && result.data.triggerWords);
+                                const noopSkipped = result.status === "skipped" && !result.saved?.length
+                                    && !(result.data && result.data.triggerWords)
+                                    && !(result.data && typeof result.data.recommendedWeight === "number");
                                 if (!noopSkipped) updateResults(result);
-                                if (result.saved?.length || (result.data && result.data.triggerWords)) {
+                                const hasRecW = result.data && typeof result.data.recommendedWeight === "number" && result.data.recommendedWeight > 0;
+                                if (result.saved?.length || (result.data && result.data.triggerWords) || hasRecW) {
                                     changedNames.add(result.name);
                                     for (const target of referencesByName.get(mplMetadataNameKey(result.name)) || []) {
                                         mplApplyMetadataData(target, result.name, result.data);
@@ -5962,7 +6042,9 @@ app.registerExtension({
                     }
                 };
                 const startRun = (names, runSettings, clearResults) => {
-                    const snapshot = names.filter(name => mplMetadataRequestedTypes(name, runSettings, metadata, fieldStates).length);
+                    const snapshot = names.filter(name =>
+                    mplMetadataRequestedTypes(name, runSettings, metadata, fieldStates).length ||
+                    mplMetadataRecNeeded(name, runSettings, metadata));
                     if (!snapshot.length) {
                         phase.textContent = mplT("所选信息无需处理。");
                         return;
@@ -6100,7 +6182,7 @@ app.registerExtension({
                 
                 // 固定全量下载，不再给选项；信息与 Lora-Manager 互通，LM 已有信息会自动复用
                 const infoLine = document.createElement("div");
-                infoLine.textContent = "将补全触发词与预览图，保存到 LoRA 同目录；与 LoRA Manager 互通，已有信息不会重复下载。";
+                infoLine.textContent = "将补全触发词与预览图，并检测作者推荐权重，保存到 LoRA 同目录；与 LoRA Manager 互通，已有信息不会重复下载。";
                 infoLine.style.cssText = "font-size:12px;color:#9aa0b5;line-height:1.6;background:#191a20;border:1px solid #3a3a3a;border-radius:6px;padding:8px 10px;margin-bottom:20px;";
 
                 // 按钮容器
@@ -6162,7 +6244,7 @@ app.registerExtension({
                     const editorValues = new Map(editors.map(({ field, textarea }) => [field, textarea?.value || ""]));
                     
                     try {
-                        const options = { download_txt: true, download_image: true };
+                        const options = { download_txt: true, download_image: true, download_rec: true };
                         const savePathMode = "same_dir";
                         
                         const response = await api.fetchApi('/malora/lora/fetch_metadata', {
@@ -6189,7 +6271,10 @@ app.registerExtension({
                                 if (textarea) textarea.value = value;
                                 if (!String(lora[field] || "").trim()) mplSetTriggerWords(lora, value);
                             }
-                            
+
+                            const rw = Number(result.data?.recommendedWeight);
+                            if (Number.isFinite(rw) && rw > 0) mplApplyMetadataData(this, lora.name, result.data);
+
                             // 刷新全局图片列表缓存（类似参考代码的loadImageList）
                             await loadLoraImageList();
                             await mplLoadExtraInfo(true);
@@ -6773,6 +6858,7 @@ app.registerExtension({
                 noteInput.addEventListener("mousedown", (e)=>e.stopPropagation());
 
                 let clipBadge = null;
+                let recBadge = null;
                 const refreshClipBadge = () => mplUpdateClipBadgeUI(clipBadge, lora);
                 const syncClipWithWeight = () => {
                     mplSyncClipWeight(lora);
@@ -7137,7 +7223,7 @@ app.registerExtension({
                     e.stopPropagation();
                     if (e.target === noteInput || 
                         e.target === weightContainer || e.target.closest('.mpl-weight-container') ||
-                        e.target === clipBadge || e.target === tagBtn || e.target === editBtn || e.target === del ||
+                        e.target === clipBadge || e.target === recBadge || e.target === tagBtn || e.target === editBtn || e.target === del ||
                         (typeof decreaseBtn !== 'undefined' && e.target === decreaseBtn) || (typeof increaseBtn !== 'undefined' && e.target === increaseBtn) || (typeof weightDisplay !== 'undefined' && e.target === weightDisplay)) {
                         e.preventDefault();
                         return false;
@@ -7177,12 +7263,40 @@ app.registerExtension({
                     clipBadge.addEventListener("dragstart", preventDrag);
                 }
 
+                // 推荐权重列：没有推荐值时也保留等宽格子，保证各行竖直对齐
+                if (!(this.layoutSettings && this.layoutSettings.hideRecWeight)) {
+                    recBadge = document.createElement("div");
+                    const _recW = Number(lora.recommendedWeight);
+                    const _hasRec = Number.isFinite(_recW) && _recW > 0 && _recW <= 1;
+                    if (_hasRec) {
+                        recBadge.className = "mpl-lora-rec-weight";
+                        const _same = Math.abs(mplLoraWeight(lora) - _recW) < 0.005;
+                        recBadge.textContent = "荐 " + _recW.toFixed(2);
+                        const _src = lora.recommendedWeightSource || "作者推荐";
+                        recBadge.title = "作者推荐权重 " + _recW.toFixed(2) + "（" + _src + "）\n单击套用到模型权重" + (_same ? "\n（当前已是推荐值）" : "");
+                        recBadge.style.cssText = "padding:1px 3px;border:1px solid " + (_same ? "#2e6b3e" : "#3f6b4f") + ";border-radius:4px;background:" + (_same ? "#1e3a26" : "#203028") + ";color:" + (_same ? "#8fe0a5" : "#8fd6a5") + ";font:10px Consolas,monospace;cursor:pointer;";
+                        recBadge.onclick = (e) => {
+                            e.stopPropagation();
+                            lora.weight = _recW;
+                            mplSyncClipWeight(lora);
+                            this.renderEmbeddedList();
+                            this.updateWidget();
+                        };
+                        recBadge.addEventListener("pointerdown", e => e.stopPropagation());
+                        recBadge.addEventListener("mousedown", e => e.stopPropagation());
+                        recBadge.addEventListener("dragstart", preventDrag);
+                    } else {
+                        recBadge.className = "mpl-lora-rec-weight mpl-lora-rec-weight-empty";
+                        recBadge.style.cssText = "visibility:hidden;pointer-events:none;";
+                    }
+                }
+
                 // 操作按钮组
                 const actions = document.createElement("div");
                 actions.className = "mpl-lora-actions";
                 actions.append(tagBtn, editBtn, del);
 
-                row.append(thumb, name, dragArea, noteInput, weightContainer, ...(clipBadge ? [clipBadge] : []), actions);
+                row.append(thumb, name, dragArea, noteInput, weightContainer, ...(clipBadge ? [clipBadge] : []), ...(recBadge ? [recBadge] : []), actions);
 
                 // 右键上下文菜单：替换 LoRA / 复制 / 组成文件夹 / 爬取信息 / 颜色 / 删除
                 row.oncontextmenu = (e) => {
@@ -10188,12 +10302,23 @@ app.registerExtension({
                 styleSection.appendChild(styleSlider.wrap);
 
                 const sliderParamsSection = document.createElement("div");
-                sliderParamsSection.style.cssText = "display: flex; flex-direction: column; gap: 12px; padding: 14px; background: #1b1d24; border-radius: 10px; border: 1px solid #2c2f3a;";
+                sliderParamsSection.style.cssText = "display: none; flex-direction: column; gap: 10px; padding: 14px; background: #1b1d24; border-radius: 10px; border: 1px solid #2c2f3a;";
 
                 const sliderParamsTitle = document.createElement("div");
-                sliderParamsTitle.textContent = "滑条参数";
-                sliderParamsTitle.style.cssText = "color: #fff; font-size: 13px; font-weight: 500; margin-bottom: 4px;";
+                sliderParamsTitle.textContent = "▸ 滑条参数";
+                sliderParamsTitle.style.cssText = "color: #fff; font-size: 13px; font-weight: 500; cursor: pointer; user-select: none;";
                 sliderParamsSection.appendChild(sliderParamsTitle);
+
+                const sliderParamsBody = document.createElement("div");
+                sliderParamsBody.style.cssText = "display: none; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px;";
+                sliderParamsSection.appendChild(sliderParamsBody);
+
+                let sliderParamsOpen = false;
+                sliderParamsTitle.onclick = () => {
+                    sliderParamsOpen = !sliderParamsOpen;
+                    sliderParamsBody.style.display = sliderParamsOpen ? "grid" : "none";
+                    sliderParamsTitle.textContent = (sliderParamsOpen ? "▾ " : "▸ ") + "滑条参数";
+                };
 
                 const buildNumberRow = (labelText, key, min, max, step) => {
                     const row = document.createElement("div");
@@ -10217,10 +10342,10 @@ app.registerExtension({
                 const minRow = buildNumberRow("最小值", "sliderMin", -10, 0, 0.1);
                 const maxRow = buildNumberRow("最大值", "sliderMax", 0, 10, 0.1);
                 const widthRow = buildNumberRow("滑条宽度(px)", "sliderWidth", 60, 300, 5);
-                sliderParamsSection.appendChild(stepRow.row);
-                sliderParamsSection.appendChild(minRow.row);
-                sliderParamsSection.appendChild(maxRow.row);
-                sliderParamsSection.appendChild(widthRow.row);
+                sliderParamsBody.appendChild(stepRow.row);
+                sliderParamsBody.appendChild(minRow.row);
+                sliderParamsBody.appendChild(maxRow.row);
+                sliderParamsBody.appendChild(widthRow.row);
 
                 const buildCheckboxRow = (labelText, key, defaultValue = true) => {
                     const row = document.createElement("label");
@@ -10239,8 +10364,13 @@ app.registerExtension({
                 const showValueRow = buildCheckboxRow("滑条旁显示当前数值", "showWeightValue");
                 const snapRow = buildCheckboxRow("拖动时吸附 0（±0.02 范围内）", "snapToZero");
                 const hideClipRow = buildCheckboxRow("隐藏 CLIP 权重列", "hideClip", false);
-                sliderParamsSection.appendChild(showValueRow.row);
-                sliderParamsSection.appendChild(snapRow.row);
+                const hideRecWeightRow = buildCheckboxRow("隐藏推荐权重列", "hideRecWeight", false);
+                sliderParamsBody.appendChild(showValueRow.row);
+                sliderParamsBody.appendChild(snapRow.row);
+
+                const hideRecWeightWrap = document.createElement("div");
+                hideRecWeightWrap.style.cssText = "padding: 0 2px;";
+                hideRecWeightWrap.appendChild(hideRecWeightRow.row);
 
                 const displaySection = document.createElement("div");
                 displaySection.style.cssText = "display: flex; flex-direction: column; gap: 8px; padding: 14px; background: #1b1d24; border-radius: 10px; border: 1px solid #2c2f3a;";
@@ -10270,6 +10400,7 @@ app.registerExtension({
                 layoutContainer.appendChild(layoutDesc);
                 layoutContainer.appendChild(styleSection);
                 layoutContainer.appendChild(sliderParamsSection);
+                layoutContainer.appendChild(hideRecWeightWrap);
                 layoutContainer.appendChild(displaySection);
                 layoutTabContent.appendChild(layoutContainer);
 
@@ -10409,6 +10540,7 @@ app.registerExtension({
                         showWeightValue: showValueRow.cb.checked,
                         snapToZero: snapRow.cb.checked,
                         hideClip: hideClipRow.cb.checked,
+                        hideRecWeight: hideRecWeightRow.cb.checked,
                     };
                     if (newLayout.sliderMin >= newLayout.sliderMax) {
                         newLayout.sliderMax = newLayout.sliderMin + 0.1;

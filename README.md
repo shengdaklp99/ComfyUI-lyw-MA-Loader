@@ -19,6 +19,12 @@ Only notable changes are listed here; minor visual or text tweaks are omitted.
 - Added target-group selection in the Add LoRA dialog
 - Added a layout guard that keeps the embedded panel aligned with the node width
 - Added a layout option to hide the CLIP weight column
+- Added author recommended weight badges and included them in metadata refresh results
+- Reserved a fixed recommended-weight column for aligned rows and added an option to hide it
+- Recommended-weight detection now runs from every metadata crawl path, including Civitai info and Lora Manager
+- Newly added LoRAs inherit saved recommended weights; the value is also shown in the LoRA info dialog
+- LoRAs whose Civitai info lists a recommended weight but whose local info lacks it appear in the metadata manager's pending list; those without one are skipped
+- LORA string imports now sync trigger words and recommended weights from saved LoRA info
 
 ### 1.0.3
 
@@ -36,7 +42,7 @@ Only notable changes are listed here; minor visual or text tweaks are omitted.
 
 ## Credits
 
-This plugin is based on and modified from [ComfyUI-ZML-Image](https://github.com/zml-w/ComfyUI-ZML-Image) by original author [**zml-w**](https://github.com/zml-w), and [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant) by original author [**shigjfg**](https://github.com/shigjfg). Special thanks to both original authors for the work this plugin is built on. Thanks also to group friend **you** for contributing fixes, new features, and improvement suggestions.
+This plugin is developed on top of [ComfyUI-ZML-Image](https://github.com/zml-w/ComfyUI-ZML-Image) (author: [**zml-w**](https://github.com/zml-w)) and [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant) (author: [**shigjfg**](https://github.com/shigjfg)), and references [ComfyUI-Lora-Manager](https://github.com/willmiao/ComfyUI-Lora-Manager) (author: [**willmiao**](https://github.com/willmiao)). Thanks to all the original authors, and to group friend **you** for contributing bug fixes, new features, and improvement suggestions.
 
 ## Features
 

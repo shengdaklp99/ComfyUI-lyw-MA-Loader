@@ -1,6 +1,7 @@
 import torch
 import os
 import json
+import html
 import folder_paths
 import comfy.sd
 import comfy.utils
@@ -85,11 +86,14 @@ def _lm_info(lora_path):
     meta = _lm_meta(lora_path)
     if not meta:
         return {}
+    rec_w, rec_src = lm_sidecar.recommended_weight(meta)
     return {
         "title": lm_sidecar.title(meta),
         "notes": lm_sidecar.notes(meta),
         "trigger_words": lm_sidecar.trigger_words(meta),
         "base_model": str(meta.get("base_model") or "").strip(),
+        "recommended_weight": rec_w,
+        "recommended_weight_source": rec_src,
     }
 
 
@@ -1419,6 +1423,16 @@ def _get_lora_metadata_inventory():
             metadata[name] = {kind: bool(paths.get(kind)) or bool(lm_kinds.get(kind)) for kind in paths}
             # 该 LoRA 是否已有完整的 Lora-Manager 记录
             metadata[name]["lm"] = bool(lora_path and _lm_is_complete(lora_path))
+            try:
+                meta = _lm_meta(lora_path) if lora_path else None
+                rec_w, _ = lm_sidecar.recommended_weight(meta)
+                rec_checked = bool(meta.get("recommended_weight_checked")) if isinstance(meta, dict) else False
+                rec_available = rec_w is not None or (
+                    not rec_checked and _civitai_recommended_weight_available(lora_path, meta))
+            except Exception:
+                rec_w, rec_available = None, False
+            metadata[name]["recommended_weight"] = rec_w
+            metadata[name]["recommended_weight_available"] = rec_available
             if not lora_path:
                 errors.append({"path": name, "error": "LoRA文件未找到"})
                 field_states[name] = {kind: field_state("local_error", reason="LoRA 文件未找到或目录不可访问") for kind in _METADATA_KINDS}
@@ -2641,6 +2655,140 @@ def _fetch_civitai_by_version(version_id, include_model=True):
     return data
 
 
+# --- 原作者推荐权重解析（从 Civitai 描述文本提取） ---
+# 只匹配明确的"推荐/建议/权重"语义 + 0.x 数值，避免把 CFG/steps 等误当成权重。
+_RE_WEIGHT_HINT = (
+    r"(?:suggested\s+ranges?|suggested\s+strength|suggested\s+weight|"
+    r"recommended\s+(?:lora\s+)?(?:strength|weight|settings?)|"
+    r"recommended\s+for\s+general\s+use|recommend\s+to\s+keep\s+it\s+at|"
+    r"recommended|suggested|recommend|suggest|"
+    r"推荐权重|推荐值|建议权重|建议值|权重|强度|"
+    r"strength|weights?|over)"
+)
+_RE_WEIGHT_NUM = r"(0\.\d+|[01](?:\.0)?)"
+_RE_WEIGHT_PHRASE = re.compile(
+    _RE_WEIGHT_HINT + r"\s*[:：]?\s*(?:around|about|start\s+at|approximately|约|大约|至)?\s*"
+    + _RE_WEIGHT_NUM + r"\s*(?:[-–—~～至]\s*" + _RE_WEIGHT_NUM + r")?",
+    re.I,
+)
+
+
+def _html_to_text(value):
+    if not isinstance(value, str):
+        return ""
+    txt = re.sub(r"<[^>]+>", " ", value)
+    txt = html.unescape(txt)
+    return re.sub(r"\s+", " ", txt).strip()
+
+
+def _extract_recommended_weight(civitai_data=None, lora_path=None):
+    """从本地已存信息或 Civitai 作者描述里解析推荐权重。
+
+    返回 (weight:float|None, source:str)。范围取下限作为起步推荐值。
+    优先级：sidecar 已持久化 > 版本描述 > 模型描述 > sidecar notes。
+    """
+    if lora_path:
+        saved_w, saved_src = lm_sidecar.recommended_weight(_lm_meta(lora_path))
+        if saved_w is not None:
+            return saved_w, saved_src
+    candidates = []
+    if isinstance(civitai_data, dict):
+        version_desc = civitai_data.get("description")
+        if version_desc:
+            candidates.append(("版本描述", version_desc))
+        model = civitai_data.get("model")
+        if isinstance(model, dict) and model.get("description"):
+            candidates.append(("模型描述", model.get("description")))
+    if lora_path:
+        meta = _lm_meta(lora_path)
+        if isinstance(meta, dict):
+            note = str(meta.get("notes") or "").strip()
+            if note:
+                candidates.append(("备注", note))
+            cv = meta.get("civitai")
+            if isinstance(cv, dict):
+                m = cv.get("model")
+                if isinstance(m, dict) and m.get("description"):
+                    candidates.append(("模型描述", m.get("description")))
+            md = str(meta.get("modelDescription") or "").strip()
+            if md:
+                candidates.append(("模型描述", md))
+    for label, raw in candidates:
+        text = _html_to_text(raw)
+        if not text:
+            continue
+        for match in _RE_WEIGHT_PHRASE.finditer(text):
+            nums = [g for g in match.groups() if g]
+            try:
+                val = float(nums[0]) if nums else None
+            except (TypeError, ValueError):
+                val = None
+            if val is None or not (0.01 <= val <= 1.0):
+                continue
+            return round(val, 2), "%s：%s" % (label, match.group(0)[:60])
+    return None, ""
+
+
+_RE_WEIGHT_STRICT = re.compile(
+    r"(?:suggested\s+(?:ranges?|strength|weight)|recommended\s+(?:lora\s+)?(?:strength|weight|settings?)|"
+    r"recommended\s+for\s+general\s+use|recommend\s+to\s+keep\s+it\s+at|"
+    r"推荐(?:\s*lora)?\s*(?:强度|权重|值)|建议(?:\s*lora)?\s*(?:强度|权重|值))"
+    r"\s*[:：]?\s*(?:around|about|start\s+at|approximately|约|大约|至)?\s*"
+    r"(?:0\.\d+|[01](?:\.0)?)",
+    re.I,
+)
+
+
+def _civitai_recommended_weight_available(lora_path, meta=None):
+    """本地 Civitai 描述里是否明确写了推荐权重（只用于判断待处理）。"""
+    if meta is None:
+        meta = _lm_meta(lora_path)
+    if not isinstance(meta, dict) or meta.get("recommended_weight_checked") is True:
+        return False
+    cv = meta.get("civitai")
+    cv = cv if isinstance(cv, dict) else {}
+    model = cv.get("model")
+    model = model if isinstance(model, dict) else {}
+    for raw in (meta.get("description"), meta.get("modelDescription"), meta.get("notes"),
+                cv.get("description"), model.get("description")):
+        text = _html_to_text(raw)
+        if text and _RE_WEIGHT_STRICT.search(text):
+            return True
+    return False
+
+
+def _apply_recommended_weight(result, lora_path, civitai_data=None, quiet=False):
+    """解析作者推荐权重 → 写入返回数据并持久化到 LM sidecar。"""
+    try:
+        rec_w, rec_src = _extract_recommended_weight(civitai_data, lora_path)
+    except Exception as e:
+        print(f"⚠️ [MA Loader] 解析推荐权重失败: {e}")
+        rec_w, rec_src = None, ""
+    data = result.setdefault("data", {})
+    if rec_w is not None:
+        data["recommendedWeight"] = rec_w
+        data["recommendedWeightSource"] = rec_src
+        data["recommendedWeightSkipped"] = False
+        try:
+            lm_sidecar.write(lora_path, recommended_weight=rec_w,
+                             recommended_weight_source=rec_src, recommended_weight_checked=True)
+            _LM_META_CACHE.pop(lm_sidecar.sidecar_path(lora_path), None)
+        except Exception as e:
+            print(f"⚠️ [MA Loader] 保存推荐权重到信息管理失败: {e}")
+        if not quiet:
+            result["recommended_weight_note"] = f"作者推荐权重 {rec_w:.2f}（{rec_src or '已保存'}）"
+        return rec_w
+    data["recommendedWeightSkipped"] = True
+    try:
+        lm_sidecar.write(lora_path, recommended_weight_checked=True)
+        _LM_META_CACHE.pop(lm_sidecar.sidecar_path(lora_path), None)
+    except Exception as e:
+        print(f"⚠️ [MA Loader] 标记推荐权重已检查失败: {e}")
+    if not quiet:
+        result["recommended_weight_note"] = "未找到作者推荐权重，已跳过"
+    return None
+
+
 def _metadata_source_content(data, kind, lora_filename):
     """Return content/key, or a confirmed reason. Missing/malformed keys are errors."""
     if kind == "txt":
@@ -2784,6 +2932,8 @@ def _fetch_lora_metadata_locked(lora_path, options, save_path_mode, overwrite, u
               "saved": [], "unchanged": [], "unavailable": [], "failed": []}
     labels = {"txt": "触发词", "image": "预览图像"}
     selected = [kind for kind in labels if options.get(f"download_{kind}", True)]
+    saved_rec_w, _ = lm_sidecar.recommended_weight(_lm_meta(lora_path))
+    need_rec_fetch = options.get("download_rec", True) is not False and saved_rec_w is None
     force_refresh = force_refresh or overwrite or update_existing
 
     # 与 Lora-Manager 同步：直接调用它自己的下载接口，让它一次把来源信息、
@@ -2807,6 +2957,7 @@ def _fetch_lora_metadata_locked(lora_path, options, save_path_mode, overwrite, u
             result["saved"] = list(selected)
             result["field_states"] = {kind: field_state(
                 "present", reason="Lora-Manager 已有信息", provenance="lora_manager") for kind in labels}
+            _apply_recommended_weight(result, lora_path, quiet=True)
             return result
         if lm_error:
             result["lm_delegate_note"] = lm_error
@@ -2857,7 +3008,7 @@ def _fetch_lora_metadata_locked(lora_path, options, save_path_mode, overwrite, u
             result["unavailable"].append(kind)
         else:
             pending.append(kind)
-    if not pending:
+    if not pending and not need_rec_fetch:
         message = "所选信息已保留或已有来源检查结果，无需重复处理" if selected else "未选择需要检查的信息"
         if selected and all(states[kind]["state"] == "user_skipped" for kind in selected):
             message = "已按人工整理标记跳过所选字段"
@@ -2865,6 +3016,7 @@ def _fetch_lora_metadata_locked(lora_path, options, save_path_mode, overwrite, u
             words = lm_sidecar.trigger_words(_lm_meta(lora_path))
             if words:
                 result["data"]["triggerWords"] = words
+        _apply_recommended_weight(result, lora_path, quiet=True)
         _sync_lm_from_local(lora_path, initial_paths)
         try:
             _lm_ensure_preview(lora_path)
@@ -2900,6 +3052,7 @@ def _fetch_lora_metadata_locked(lora_path, options, save_path_mode, overwrite, u
         lm_words = lm_sidecar.trigger_words(_lm_meta(lora_path))
         if lm_words:
             result.setdefault("data", {})["triggerWords"] = lm_words
+        _apply_recommended_weight(result, lora_path, civitai_data)
         # 本地已有预览但 LM 库里没登记时，主动登记，保证 LM 也能显示
         try:
             _lm_ensure_preview(lora_path)
@@ -2931,7 +3084,7 @@ def _fetch_lora_metadata_locked(lora_path, options, save_path_mode, overwrite, u
                 else:
                     remaining.append(kind)
             pending = remaining
-            if not pending:
+            if not pending and not need_rec_fetch:
                 _sync_lm_from_local(lora_path, initial_paths)
                 try:
                     _lm_ensure_preview(lora_path)

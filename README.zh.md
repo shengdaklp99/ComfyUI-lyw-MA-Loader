@@ -19,6 +19,12 @@ English: [README.md](README.md)
 - LoRA 添加窗口新增目标群组选择
 - 新增布局守护，节点拉宽后内嵌面板不再被压窄
 - 布局设置新增「隐藏 CLIP 权重列」选项
+- 新增作者推荐权重标签，并纳入一键补全统计
+- 推荐权重列固定占位，行与行纵向对齐；设置里可隐藏该列
+- 触发词/信息下载、单条爬取、LoRA 信息管理和一键补全都会检测 Civitai 推荐权重
+- 新添加的 LoRA 会继承已保存的推荐权重，LoRA 信息窗口也会显示该值
+- Civitai 明确写了推荐权重但本地未保存的 LoRA 会出现在待处理列表，本就没有推荐权重的会跳过
+- LORA 串导入现在会同步已保存的触发词和推荐权重
 
 ### 1.0.3
 
@@ -36,7 +42,7 @@ English: [README.md](README.md)
 
 ## 致谢
 
-本插件是在 [ComfyUI-ZML-Image](https://github.com/zml-w/ComfyUI-ZML-Image)（基础作者：[**zml-w**](https://github.com/zml-w)）和 [ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant)（基础作者：[**shigjfg**](https://github.com/shigjfg)）的基础上修改而来。特别感谢以上作者提供的基础工作。同时感谢群友 **you** 参与修复、增添功能并提出改进建议。
+本插件基于 [ComfyUI-ZML-Image](https://github.com/zml-w/ComfyUI-ZML-Image)（作者：[**zml-w**](https://github.com/zml-w)）、[ComfyUI-Magic-Assistant](https://github.com/shigjfg/ComfyUI-Magic-Assistant)（作者：[**shigjfg**](https://github.com/shigjfg)）修改开发，参考了 [ComfyUI-Lora-Manager](https://github.com/willmiao/ComfyUI-Lora-Manager)（作者：[**willmiao**](https://github.com/willmiao)）。向各位原作者致谢，同时感谢群友 **you** 参与问题修复、新增功能并提供优化建议。
 
 ## 功能
 
