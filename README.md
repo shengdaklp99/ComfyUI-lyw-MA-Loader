@@ -8,6 +8,10 @@ A standalone, visual LoRA loader node for ComfyUI — organize LoRAs into groups
 
 Only notable changes are listed here; minor visual or text tweaks are omitted.
 
+### 1.0.7
+
+- Added ComfyUI Desktop compatibility by replacing native prompt/confirm/alert dialogs with in-page dialogs across presets, folders, weights, and metadata actions
+
 ### 1.0.5
 
 - Added author recommended weights: row badges, metadata refresh statistics, and one-click apply

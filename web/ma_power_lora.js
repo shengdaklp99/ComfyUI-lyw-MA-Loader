@@ -356,6 +356,189 @@ function mplRefreshAllSidebars() {
         if (n && typeof n._renderSidebar === "function") n._renderSidebar();
     });
 }
+
+// ===================== 页面内弹窗（替代 window.prompt / confirm / alert） =====================
+// ComfyUI 桌面端（Electron）不实现 window.prompt：调用时直接抛
+// "prompt() is and will not be supported"，confirm 也直接返回 false。
+// 于是「新建预设分类 / 新建收藏夹 / 拖文件夹存预设 / 点数字改权重」这些操作点了没反应。
+// 这里统一换成页面内弹窗，浏览器 / 桌面端行为一致。
+function mplDialog(opts = {}) {
+    const {
+        title = "",
+        message = "",
+        defaultValue = null,
+        placeholder = "",
+        okText = "确定",
+        cancelText = "取消",
+        danger = false,
+        withInput = true,
+    } = opts;
+
+    return new Promise((resolve) => {
+        document.querySelectorAll(".mpl-dialog-overlay").forEach(el => el.remove());
+
+        const overlay = document.createElement("div");
+        overlay.className = "mpl-dialog-overlay";
+        overlay.style.cssText = "position:fixed;inset:0;z-index:10050;background:rgba(0,0,0,.62);" +
+            "display:flex;align-items:center;justify-content:center;";
+
+        const box = document.createElement("div");
+        box.className = "mpl-dialog";
+        box.style.cssText = "box-sizing:border-box;width:min(420px,92vw);background:#1e1f26;" +
+            "border:1px solid #3b3d49;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.72);" +
+            "color:#e8e8ee;font:13px/1.55 sans-serif;padding:16px 18px 14px;";
+
+        let input = null;
+        let settled = false;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            document.removeEventListener("keydown", onKey, true);
+            overlay.remove();
+            resolve(value);
+        };
+        const onKey = (e) => {
+            if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); }
+            else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); finish(withInput ? (input ? input.value : "") : true); }
+        };
+
+        if (title) {
+            const head = document.createElement("div");
+            head.textContent = title;
+            head.style.cssText = "font-size:14px;font-weight:700;color:#f2f3f7;margin-bottom:10px;";
+            box.appendChild(head);
+        }
+        if (message) {
+            const msg = document.createElement("div");
+            msg.textContent = message;
+            msg.style.cssText = "font-size:12.5px;color:#a9b0c0;white-space:pre-wrap;word-break:break-word;margin-bottom:12px;";
+            box.appendChild(msg);
+        }
+        if (withInput) {
+            input = document.createElement("input");
+            input.type = "text";
+            input.value = defaultValue == null ? "" : String(defaultValue);
+            if (placeholder) input.placeholder = placeholder;
+            input.style.cssText = "box-sizing:border-box;width:100%;background:#15161c;border:1px solid #3b3d49;" +
+                "border-radius:8px;color:#e8e8ee;padding:8px 10px;font-size:13px;outline:none;";
+            input.addEventListener("focus", () => { input.style.borderColor = "#6c8cff"; });
+            input.addEventListener("blur", () => { input.style.borderColor = "#3b3d49"; });
+            box.appendChild(input);
+        }
+
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:14px;";
+        const mkBtn = (text, primary, isDanger) => {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.textContent = text;
+            b.style.cssText = "padding:6px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;border:1px solid " +
+                (primary ? (isDanger ? "#ef6b7d" : "#6c8cff") : "#3b3d49") + ";background:" +
+                (primary ? (isDanger ? "#ef6b7d" : "#6c8cff") : "#26272d") + ";color:" +
+                (primary ? "#fff" : "#c8cad6") + ";";
+            return b;
+        };
+        if (cancelText) {
+            const cancel = mkBtn(cancelText, false, false);
+            cancel.onclick = () => finish(null);
+            row.appendChild(cancel);
+        }
+        const ok = mkBtn(okText, true, danger);
+        ok.onclick = () => finish(withInput ? (input ? input.value : "") : true);
+        row.appendChild(ok);
+        box.appendChild(row);
+
+        ["pointerdown", "mousedown", "click", "dblclick", "wheel"].forEach(ev => {
+            overlay.addEventListener(ev, (e) => e.stopPropagation(), { passive: ev === "wheel" });
+        });
+        overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) finish(null); });
+
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        document.addEventListener("keydown", onKey, true);
+        setTimeout(() => {
+            if (input) { try { input.focus(); input.select(); } catch (e) {} }
+            else { try { ok.focus(); } catch (e) {} }
+        }, 30);
+    });
+}
+
+// 返回输入的字符串；取消返回 null（与 window.prompt 语义一致）
+function mplAsk(title, defaultValue = "", opts = {}) {
+    return mplDialog(Object.assign({ title, defaultValue, withInput: true }, opts));
+}
+// 返回 true / false
+function mplConfirm(message, opts = {}) {
+    return mplDialog(Object.assign({ title: "请确认", message, withInput: false, okText: "确定" }, opts))
+        .then(v => v !== null);
+}
+// 只提示，不返回值
+function mplAlert(message, title = "提示") {
+    return mplDialog({ title, message, withInput: false, okText: "知道了", cancelText: "" }).then(() => undefined);
+}
+
+// 点数字就地改值：在数值旁边弹一个迷你输入框（比整屏弹窗更顺手）
+function mplEditValueAt(anchorEl, currentValue, opts = {}) {
+    const { label = "", width = 92 } = opts;
+    return new Promise((resolve) => {
+        document.querySelectorAll(".mpl-inline-edit").forEach(el => el.remove());
+
+        const wrap = document.createElement("div");
+        wrap.className = "mpl-inline-edit";
+        wrap.style.cssText = "position:fixed;z-index:10060;display:flex;align-items:center;gap:6px;" +
+            "padding:6px 8px;background:#1e1f26;border:1px solid #6c8cff;border-radius:9px;" +
+            "box-shadow:0 12px 30px rgba(0,0,0,.65);font:12px/1.2 sans-serif;color:#e8e8ee;";
+
+        if (label) {
+            const lab = document.createElement("span");
+            lab.textContent = label;
+            lab.style.cssText = "color:#9aa3b2;white-space:nowrap;";
+            wrap.appendChild(lab);
+        }
+        const input = document.createElement("input");
+        input.type = "text";
+        input.value = currentValue == null ? "" : String(currentValue);
+        input.style.cssText = "width:" + width + "px;box-sizing:border-box;background:#15161c;border:1px solid #3b3d49;" +
+            "border-radius:6px;color:#e8e8ee;padding:4px 6px;font-size:12px;text-align:center;outline:none;";
+        wrap.appendChild(input);
+
+        let settled = false;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            document.removeEventListener("keydown", onKey, true);
+            document.removeEventListener("mousedown", onDown, true);
+            wrap.remove();
+            resolve(value);
+        };
+        const onKey = (e) => {
+            if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); }
+            else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); finish(input.value); }
+        };
+        const onDown = (e) => { if (!wrap.contains(e.target)) finish(null); };
+
+        document.body.appendChild(wrap);
+
+        try {
+            const r = anchorEl && anchorEl.getBoundingClientRect ? anchorEl.getBoundingClientRect() : null;
+            const w = wrap.offsetWidth || 140;
+            const h = wrap.offsetHeight || 34;
+            let left = r ? r.left + r.width / 2 - w / 2 : window.innerWidth / 2 - w / 2;
+            let top = r ? r.bottom + 6 : window.innerHeight / 2;
+            if (r && top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+            left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+            wrap.style.left = left + "px";
+            wrap.style.top = top + "px";
+        } catch (e) {}
+
+        ["pointerdown", "mousedown", "click", "dblclick"].forEach(ev => {
+            wrap.addEventListener(ev, (e) => e.stopPropagation());
+        });
+        document.addEventListener("keydown", onKey, true);
+        setTimeout(() => document.addEventListener("mousedown", onDown, true), 0);
+        setTimeout(() => { try { input.focus(); input.select(); } catch (e) {} }, 20);
+    });
+}
 function mplBuildSidebarBackup() {
     return {
         format: "lyw-ma-loader-presets-favorites",
@@ -2189,7 +2372,7 @@ app.registerExtension({
             // ---------- 预设操作 ----------
             nodeType.prototype._mplApplyPreset = function(name, drop) {
                 const folders = mplPresetFolders(MPL_SIDEBAR.presets[name]);
-                if (!folders.length) { alert("该预设没有可用的 LoRA"); return; }
+                if (!folders.length) { void mplAlert("该预设没有可用的 LoRA"); return; }
                 const added = [];
                 folders.forEach(f => {
                     const copy = JSON.parse(JSON.stringify(f));
@@ -2216,7 +2399,7 @@ app.registerExtension({
             nodeType.prototype._mplPresetMenu = function(name, x, y) {
                 this._mplSideMenu(x || 200, y || 200, [{
                     label: "重命名预设", fn: async () => {
-                        const nn = prompt("预设新名称：", name);
+                        const nn = await mplAsk("重命名预设", name, { message: "输入新的预设名称：" });
                         if (!nn || !nn.trim() || nn.trim() === name) return;
                         const newName = nn.trim();
                         try {
@@ -2226,18 +2409,18 @@ app.registerExtension({
                             });
                             const rj = await resp.json();
                             if (!rj || rj.status !== "success") {
-                                alert("重命名失败：" + ((rj && rj.message) || "未知错误"));
+                                await mplAlert("重命名失败：" + ((rj && rj.message) || "未知错误"));
                                 return;
                             }
                             await mplLoadSidebar(true);
                             mplRefreshAllSidebars();
                         } catch (e) {
-                            alert("重命名失败：" + e);
+                            await mplAlert("重命名失败：" + e);
                         }
                     }
                 }, {
                     label: "删除预设：" + name, danger: true, fn: async () => {
-                        if (!confirm(`确定删除预设 "${name}" 吗？`)) return;
+                        if (!(await mplConfirm(`确定删除预设 "${name}" 吗？`, { danger: true, okText: "删除" }))) return;
                         await api.fetchApi("/malora/lora/delete_preset", {
                             method: "POST", headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ name }),
@@ -2250,7 +2433,7 @@ app.registerExtension({
                 }]);
             };
 
-            nodeType.prototype._mplDropFolderAsPreset = function(e, category) {
+            nodeType.prototype._mplDropFolderAsPreset = async function(e, category) {
                 // 拖一个已有预设到分类：移动分类
                 let presetName = "";
                 try {
@@ -2277,8 +2460,10 @@ app.registerExtension({
                 const folder = (this.loraData.folders || []).find(f => this._uidFor(f) === uid);
                 if (!folder) return;
                 const def = folder.name || "预设";
-                const name = prompt(category ? `保存到「${category}」，预设名称：` : "预设名称：", def);
-                if (!name) return;
+                const name = await mplAsk("保存为预设", def, {
+                    message: category ? `保存到分类「${category}」，预设名称：` : "预设名称：",
+                });
+                if (!name || !name.trim()) return;
                 const content = { folders: [JSON.parse(JSON.stringify(folder))] };
                 delete content.folders[0]._uid;
                 (content.folders[0].loras || []).forEach(l => delete l._uid);
@@ -2286,11 +2471,11 @@ app.registerExtension({
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ name, content, category }),
                 }).then(() => mplLoadSidebar(true)).then(() => mplRefreshAllSidebars())
-                  .catch((err) => alert("保存预设失败: " + err));
+                  .catch((err) => mplAlert("保存预设失败: " + err));
             };
 
-            nodeType.prototype._mplNewPresetCategory = function() {
-                const name = prompt("新建预设分类名称：", "");
+            nodeType.prototype._mplNewPresetCategory = async function() {
+                const name = await mplAsk("新建预设分类", "", { message: "给这个分类起个名字：" });
                 if (!name || !name.trim()) return;
                 const n = name.trim();
                 if (!MPL_SIDEBAR.categories.includes(n)) MPL_SIDEBAR.categories.push(n);
@@ -2367,8 +2552,8 @@ app.registerExtension({
                                 ? (mplClipFollowsWeight(it) ? "CLIP 跟随模型权重\n右键改为自定义" : "CLIP 自定义权重\n右键恢复跟随")
                                 : "单击修改模型权重";
                             el.style.cssText = "color:" + color + ";min-width:60px;text-align:right;cursor:pointer;";
-                            el.onclick = () => {
-                                const v = prompt("输入" + (key === "weight" ? "模型" : "CLIP") + "权重：", value);
+                            el.onclick = async () => {
+                                const v = await mplEditValueAt(el, value, { label: key === "weight" ? "M" : "C" });
                                 if (v === null) return;
                                 if (key === "weight") {
                                     const n = parseFloat(v);
@@ -2422,7 +2607,7 @@ app.registerExtension({
                         delete c._found;
                         return mplDecorateNewLora(c);
                     });
-                    if (!items.length) { alert("没有可加入的 LoRA"); return null; }
+                    if (!items.length) { void mplAlert("没有可加入的 LoRA"); return null; }
                     return items;
                 };
                 const addToNode = (presetName, items) => {
@@ -2455,8 +2640,8 @@ app.registerExtension({
             nodeType.prototype._mplCategoryMenu = function(e, name, isCat) {
                 const idx = MPL_SIDEBAR.categories.indexOf(name);
                 const items = [{
-                    label: "重命名分类", fn: () => {
-                        const nn = prompt("分类新名称：", name);
+                    label: "重命名分类", fn: async () => {
+                        const nn = await mplAsk("重命名分类", name, { message: "输入新的分类名称：" });
                         if (!nn || !nn.trim()) return;
                         const v = nn.trim();
                         MPL_SIDEBAR.categories[idx] = v;
@@ -2466,8 +2651,8 @@ app.registerExtension({
                         mplSavePresetMeta().then(() => mplRefreshAllSidebars());
                     }
                 }, {
-                    label: "删除分类（预设保留在未分类）", danger: true, fn: () => {
-                        if (!confirm(`删除分类 "${name}"？分类里的预设会移到「未分类」。`)) return;
+                    label: "删除分类（预设保留在未分类）", danger: true, fn: async () => {
+                        if (!(await mplConfirm(`删除分类 "${name}"？分类里的预设会移到「未分类」。`, { danger: true, okText: "删除" }))) return;
                         MPL_SIDEBAR.categories.splice(idx, 1);
                         Object.keys(MPL_SIDEBAR.assignments).forEach(k => {
                             if (MPL_SIDEBAR.assignments[k] === name) delete MPL_SIDEBAR.assignments[k];
@@ -2559,8 +2744,8 @@ app.registerExtension({
                 }
             };
 
-            nodeType.prototype._mplNewFavoriteCollection = function() {
-                const name = prompt("新建收藏夹名称：", "");
+            nodeType.prototype._mplNewFavoriteCollection = async function() {
+                const name = await mplAsk("新建收藏夹", "", { message: "给这个收藏夹起个名字：" });
                 if (!name || !name.trim()) return;
                 const n = name.trim();
                 if (!MPL_SIDEBAR.favorites.some(c => c.name === n)) {
@@ -2571,16 +2756,16 @@ app.registerExtension({
 
             nodeType.prototype._mplFavoriteMenu = function(e, name) {
                 const items = [{
-                    label: "重命名收藏夹", fn: () => {
-                        const nn = prompt("收藏夹新名称：", name);
+                    label: "重命名收藏夹", fn: async () => {
+                        const nn = await mplAsk("重命名收藏夹", name, { message: "输入新的收藏夹名称：" });
                         if (!nn || !nn.trim()) return;
                         const col = MPL_SIDEBAR.favorites.find(c => c.name === name);
                         if (col) col.name = nn.trim();
                         mplSaveFavorites().then(() => mplRefreshAllSidebars());
                     }
                 }, {
-                    label: "删除收藏夹", danger: true, fn: () => {
-                        if (!confirm(`删除收藏夹 "${name}"？`)) return;
+                    label: "删除收藏夹", danger: true, fn: async () => {
+                        if (!(await mplConfirm(`删除收藏夹 "${name}"？`, { danger: true, okText: "删除" }))) return;
                         MPL_SIDEBAR.favorites = MPL_SIDEBAR.favorites.filter(c => c.name !== name);
                         mplSaveFavorites().then(() => mplRefreshAllSidebars());
                     }
@@ -4473,9 +4658,9 @@ app.registerExtension({
                         delBtn.className = "mpl-mini-btn del";
                         delBtn.innerHTML = mplIcon("close", 13);
                         delBtn.title = "删除文件夹";
-                        delBtn.onclick = (e) => {
+                        delBtn.onclick = async (e) => {
                             e.stopPropagation();
-                            if (confirm("Delete folder?")) {
+                            if (await mplConfirm("Delete folder?", { danger: true, okText: "删除" })) {
                                 if (this._previewTimeout) { clearTimeout(this._previewTimeout); this._previewTimeout = null; }
                                 if (this._previewDiv) { this._previewDiv.remove(); this._previewDiv = null; }
                                 document.querySelectorAll('.mpl-lora-preview').forEach(p => p.remove());
@@ -4855,7 +5040,7 @@ app.registerExtension({
                     flex: none;
                 `;
                 deleteBtn.onclick = async () => {
-                    if (confirm("确定要删除这个 LoRA 及其所有相关文件吗？此操作不可恢复！")) {
+                    if (await mplConfirm("确定要删除这个 LoRA 及其所有相关文件吗？此操作不可恢复！", { danger: true, okText: "删除" })) {
                         try {
                             const response = await api.fetchApi('/malora/lora/delete_lora_complete', {
                                 method: 'POST',
@@ -4926,13 +5111,13 @@ app.registerExtension({
                                 }
                                 
                                 document.body.removeChild(overlay);
-                                alert(result.message || "删除成功");
+                                void mplAlert(result.message || "删除成功");
                             } else {
-                                alert(result.message || "删除失败");
+                                void mplAlert(result.message || "删除失败");
                             }
                         } catch (error) {
                             console.error("删除LoRA时出错:", error);
-                            alert("删除失败: " + error.message);
+                            void mplAlert("删除失败: " + error.message);
                         }
                     }
                 };
@@ -5166,7 +5351,7 @@ app.registerExtension({
                             }).then(r => r.json()));
                         }
                         if (!results.every(r => r && r.status === "success")) {
-                            alert("保存失败：" + results.map(r => (r && r.message) || "未知错误").join("\n"));
+                            void mplAlert("保存失败：" + results.map(r => (r && r.message) || "未知错误").join("\n"));
                             return;
                         }
                         lora.triggerWords = text;
@@ -5191,7 +5376,7 @@ app.registerExtension({
                         document.body.removeChild(overlay);
                     } catch (error) {
                         console.error("保存LoRA内容时出错:", error);
-                        alert("保存时发生错误：" + error.message);
+                        void mplAlert("保存时发生错误：" + error.message);
                     }
                 };
 
@@ -5236,7 +5421,7 @@ app.registerExtension({
             // 批量编辑：为选中的多个 LoRA 批量写入触发词(txt)
             nodeType.prototype.showBatchEditModal = async function(fileList) {
                 const files = Array.from(fileList || []);
-                if (!files.length) { alert("请先选择要处理的 LoRA"); return; }
+                if (!files.length) { void mplAlert("请先选择要处理的 LoRA"); return; }
 
                 const fetchOverlay = document.createElement("div");
                 fetchOverlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10020;display:flex;align-items:center;justify-content:center;";
@@ -5352,7 +5537,7 @@ app.registerExtension({
                     await Promise.all(Array.from({ length: Math.min(3, files.length) }, () => worker()));
                     statusLine.style.color = "#8b8d9b";
                     statusLine.textContent = `完成：处理 ${okCount} 个（触发词 ${tagCount} 个、推荐权重 ${recCount} 个、预览 ${imgCount} 个），失败 ${failCount} 个`;
-                    if (failCount) alert(`部分失败：` + String.fromCharCode(10) + errs.join(String.fromCharCode(10)));
+                    if (failCount) void mplAlert(`部分失败：` + String.fromCharCode(10) + errs.join(String.fromCharCode(10)));
                     await mplLoadExtraInfo(true);
                     if (this.renderEmbeddedList) this.renderEmbeddedList();
                     if (this.updateWidget) this.updateWidget();
@@ -5370,7 +5555,7 @@ app.registerExtension({
 
             nodeType.prototype.fetchAllLoraMetadata = async function() {
                 const origin = this;
-                if (this._mplFetchAllRunning) { alert("正在补全中，请稍候…"); return; }
+                if (this._mplFetchAllRunning) { void mplAlert("正在补全中，请稍候…"); return; }
                 const graphNodes = mplMetadataGraphNodes(origin);
                 const nameToNodes = new Map();
                 const names = [];
@@ -5382,8 +5567,8 @@ app.registerExtension({
                         nameToNodes.get(key).add(target);
                     }
                 }
-                if (!names.length) { alert("当前工作流的 LoRA 组里还没有 LoRA，请先添加"); return; }
-                if (!window.confirm(`将强制重新爬取当前工作流中 ${names.length} 个 LoRA 的信息（触发词+预览图），\n并把结果更新到所有已成型组里。\n\n本地自命名、来源查不到的 LoRA 会跳过，保持原样。\n\n开始吗？`)) return;
+                if (!names.length) { void mplAlert("当前工作流的 LoRA 组里还没有 LoRA，请先添加"); return; }
+                if (!(await mplConfirm(`将强制重新爬取当前工作流中 ${names.length} 个 LoRA 的信息（触发词+预览图），\n并把结果更新到所有已成型组里。\n\n本地自命名、来源查不到的 LoRA 会跳过，保持原样。\n\n开始吗？`, { okText: "开始" }))) return;
 
                 this._mplFetchAllRunning = true;
                 const overlay = document.createElement("div");
@@ -6041,7 +6226,7 @@ app.registerExtension({
                         updateControls();
                     }
                 };
-                const startRun = (names, runSettings, clearResults) => {
+                const startRun = async (names, runSettings, clearResults) => {
                     const snapshot = names.filter(name =>
                     mplMetadataRequestedTypes(name, runSettings, metadata, fieldStates).length ||
                     mplMetadataRecNeeded(name, runSettings, metadata));
@@ -6056,7 +6241,7 @@ app.registerExtension({
                                 `${mplT("信息类型：")}${mplMetadataTypes(runSettings).map(type => mplT(typeLabels[`download_${type}`])).join(", ")}`,
                                 mplT("人工确认所选缺项暂不在线补全，不检查来源。可用“恢复自动补全”撤销。"),
                             ].join("\n");
-                            if (!confirm(prompt)) return;
+                            if (!(await mplConfirm(prompt, { okText: "继续" }))) return;
                         }
                         return runLocalReview(snapshot, runSettings);
                     }
@@ -6076,7 +6261,7 @@ app.registerExtension({
                             `${mplT("信息类型：")}${types.map(type => type === "image" ? mplT("预览图像") : `.${type}`).join(", ")}`,
                             mplT("会覆盖所选模型的已有信息文件，节点权重和自定义触发词保持不变。"),
                         ].join("\n");
-                        if (!confirm(prompt)) return;
+                        if (!(await mplConfirm(prompt, { okText: "继续" }))) return;
                     }
                     return run(snapshot, runSettings, clearResults);
                 };
@@ -6299,13 +6484,13 @@ app.registerExtension({
                             fetching = false;
                             closeFetch();
                             const message = result.message || mplT(result.saved?.length ? "信息检查与补全完成" : "已检查，未新增信息。");
-                            alert(message + (result.record_warning ? `\n${mplT("检查记录未保存：")}${result.record_warning}` : ""));
+                            void mplAlert(message + (result.record_warning ? `\n${mplT("检查记录未保存：")}${result.record_warning}` : ""));
                         } else {
-                            alert((result.message || mplT("爬取失败")) + (result.record_warning ? `\n${mplT("检查记录未保存：")}${result.record_warning}` : ""));
+                            void mplAlert((result.message || mplT("爬取失败")) + (result.record_warning ? `\n${mplT("检查记录未保存：")}${result.record_warning}` : ""));
                         }
                     } catch (error) {
                         console.error("爬取元数据时出错:", error);
-                        alert("爬取失败: " + error.message);
+                        void mplAlert("爬取失败: " + error.message);
                     } finally {
                         fetching = false;
                         controls.forEach(control => { control.disabled = false; });
@@ -6922,9 +7107,9 @@ app.registerExtension({
                     align-items: center;
                     justify-content: center;
                 `;
-                weightDisplay.onclick = (e) => {
+                weightDisplay.onclick = async (e) => {
                     e.stopPropagation();
-                    const newVal = prompt("输入权重:", lora.weight);
+                    const newVal = await mplEditValueAt(weightDisplay, lora.weight, { label: "权重" });
                     if (newVal !== null) {
                         const numVal = parseFloat(newVal);
                         if (!isNaN(numVal)) {
@@ -7081,9 +7266,9 @@ app.registerExtension({
                         border-left: 1px solid #444;
                         flex-shrink: 0;
                     `;
-                    valueDisplay.onclick = (e) => {
+                    valueDisplay.onclick = async (e) => {
                         e.stopPropagation();
-                        const newVal = prompt("输入权重:", lora.weight);
+                        const newVal = await mplEditValueAt(valueDisplay, lora.weight, { label: "权重" });
                         if (newVal !== null) {
                             const numVal = parseFloat(newVal);
                             if (!isNaN(numVal)) {
@@ -7243,9 +7428,9 @@ app.registerExtension({
                     clipBadge = document.createElement("div");
                     clipBadge.className = "mpl-lora-clip-weight";
                     mplUpdateClipBadgeUI(clipBadge, lora);
-                    clipBadge.onclick = (e) => {
+                    clipBadge.onclick = async (e) => {
                         e.stopPropagation();
-                        const v = prompt("输入自定义 CLIP 权重：", lora.clipWeight);
+                        const v = await mplEditValueAt(clipBadge, lora.clipWeight, { label: "CLIP" });
                         if (v !== null && mplSetCustomClipWeight(lora, v)) {
                             refreshClipBadge();
                             this.updateWidget();
@@ -7769,9 +7954,9 @@ app.registerExtension({
                 const saveBtn = document.createElement("button");
                 saveBtn.textContent = "另存当前配色为预设";
                 saveBtn.style.cssText = "padding:6px 12px;background:#00897b;border:none;color:#fff;border-radius:6px;cursor:pointer;font-weight:600;margin-right:auto;";
-                saveBtn.onclick = () => {
-                    const name = prompt("给当前配色起个名字：", "我的配色");
-                    if (!name) return;
+                saveBtn.onclick = async () => {
+                    const name = await mplAsk("保存配色预设", "我的配色", { message: "给当前配色起个名字：" });
+                    if (!name || !name.trim()) return;
                     const cs = this.colorSettings || {};
                     const fs = this.folderColorSettings || {};
                     const preset = {
@@ -7833,7 +8018,7 @@ app.registerExtension({
                 });
                 if (!picked.length && fallbackLora) {
                     if (this._mplLoraInIgnoredFolder(fallbackLora)) {
-                        alert("该 LoRA 所在群组已被忽略，不参与分组；请先取消忽略。");
+                        void mplAlert("该 LoRA 所在群组已被忽略，不参与分组；请先取消忽略。");
                         return;
                     }
                     const tok = "l:" + this._uidFor(fallbackLora);
@@ -7903,7 +8088,7 @@ app.registerExtension({
                 });
                 if (!picked.length && fallbackLora) {
                     if (this._mplLoraInIgnoredFolder(fallbackLora)) {
-                        alert("该 LoRA 所在群组已被忽略，不参与额外群组；请先取消忽略。");
+                        void mplAlert("该 LoRA 所在群组已被忽略，不参与额外群组；请先取消忽略。");
                         return;
                     }
                     picked.push({ lora: fallbackLora, tok: "l:" + this._uidFor(fallbackLora) });
@@ -8339,13 +8524,12 @@ app.registerExtension({
                     it.onclick = (ev) => { ev.stopPropagation(); menu.remove(); fn(); };
                     menu.appendChild(it);
                 };
-                mkItem("保存为预设组", () => {
+                mkItem("保存为预设组", async () => {
                     const defName = String(folder.name || "预设").trim() || "预设";
                     const oldCat = (MPL_SIDEBAR.assignments && MPL_SIDEBAR.assignments[defName]) || "";
-                    const name = prompt(
-                        "保存当前 LORA 组为预设（同名会覆盖更新）：" + (oldCat ? "\n当前分类：" + oldCat : ""),
-                        defName
-                    );
+                    const name = await mplAsk("保存为预设组", defName, {
+                        message: "保存当前 LORA 组为预设（同名会覆盖更新）" + (oldCat ? "\n当前分类：" + oldCat : ""),
+                    });
                     if (!name || !name.trim()) return;
                     const nm = name.trim();
                     const category = (MPL_SIDEBAR.assignments && MPL_SIDEBAR.assignments[nm]) || oldCat || "";
@@ -8357,21 +8541,21 @@ app.registerExtension({
                         body: JSON.stringify({ name: nm, content, category }),
                     }).then(r => r.json()).then(res => {
                         if (res && res.status === "error") {
-                            alert("保存预设失败：" + ((res && res.message) || "未知错误"));
+                            void mplAlert("保存预设失败：" + ((res && res.message) || "未知错误"));
                             return;
                         }
                         return mplLoadSidebar(true).then(() => mplRefreshAllSidebars());
-                    }).catch(err => alert("保存预设失败: " + err));
+                    }).catch(err => void mplAlert("保存预设失败: " + err));
                 }, false, 'save');
                 mkItem("颜色设置", () => {
                     this.showFolderColorModal(folder, fDiv);
                 }, false, 'palette');
-                mkItem("重命名", () => {
-                    const newName = prompt("Rename:", folder.name);
-                    if (newName) { folder.name = newName; this.renderEmbeddedList(); this.updateWidget(); }
+                mkItem("重命名", async () => {
+                    const newName = await mplAsk("重命名文件夹", folder.name, { message: "输入新的文件夹名称：" });
+                    if (newName && newName.trim()) { folder.name = newName.trim(); this.renderEmbeddedList(); this.updateWidget(); }
                 }, false, 'edit');
-                mkItem("删除文件夹", () => {
-                    if (confirm("Delete folder?")) {
+                mkItem("删除文件夹", async () => {
+                    if (await mplConfirm("Delete folder?", { danger: true, okText: "删除" })) {
                         if (this._previewTimeout) { clearTimeout(this._previewTimeout); this._previewTimeout = null; }
                         if (this._previewDiv) { this._previewDiv.remove(); this._previewDiv = null; }
                         document.querySelectorAll('.mpl-lora-preview').forEach(p => p.remove());
@@ -9161,9 +9345,9 @@ app.registerExtension({
                     // 添加按钮（合并窗口：按 actionMode 执行添加或替换）
                     addBtn.onclick = async () => {
                         if (actionMode === "replace") {
-                            if (!pendingReplace) { alert("请先在上方【替换目标】里选择要替换的 LoRA"); return; }
+                            if (!pendingReplace) { void mplAlert("请先在上方【替换目标】里选择要替换的 LoRA"); return; }
                             const first = Array.from(selectedFiles)[0];
-                            if (!first) { alert("请选择要替换成的 LoRA"); return; }
+                            if (!first) { void mplAlert("请选择要替换成的 LoRA"); return; }
                             this.performReplaceLora(pendingReplace, first);
                             document.body.removeChild(dialog);
                             return;
@@ -9327,7 +9511,7 @@ app.registerExtension({
                     requestAnimationFrame(() => {
                         try { renderContent(); } catch(e) { console.error(e); }
                     });
-                } catch(e) { alert("Error: "+e); }
+                } catch(e) { void mplAlert("Error: "+e); }
             };
 
             // 替换指定位置 lora 的 name（保留其 weight/tags/note/enabled 等，仅替换文件）
@@ -9810,13 +9994,13 @@ app.registerExtension({
                     closeX.onclick = () => closeDetectModal();
                     document.addEventListener("keydown", escHandler, true);
                 } catch (e) {
-                    alert("LoRA 检测: " + e);
+                    void mplAlert("LoRA 检测: " + e);
                 }
             };
 
             nodeType.prototype.saveFolderPreset = async function(folder) {
-                const name = prompt("Save Preset As:", folder.name);
-                if(!name) return;
+                const name = await mplAsk("保存为预设", folder.name, { message: "预设名称：" });
+                if(!name || !name.trim()) return;
                 try {
                     await api.fetchApi("/malora/lora/save_preset", {
                         method: "POST", headers: { "Content-Type": "application/json" },
@@ -9824,8 +10008,8 @@ app.registerExtension({
                     });
                     await mplLoadSidebar(true);
                     this._renderSidebar?.();
-                    alert("Saved!");
-                } catch(e) { alert(e); }
+                    void mplAlert("预设已保存");
+                } catch(e) { void mplAlert(String(e)); }
             };
 
             nodeType.prototype.showSettingsModal = function() {
@@ -10442,18 +10626,18 @@ app.registerExtension({
                         mplNormalizeSidebarImport(payload);
                         await mplLoadSidebar(true);
                         mplDownloadJson(`ma-loader-backup-before-import-${stamp()}.json`, mplBuildSidebarBackup());
-                        if (!confirm("导入会覆盖当前所有预设与收藏。当前数据已自动下载为备份文件，继续导入吗？")) {
+                        if (!(await mplConfirm("导入会覆盖当前所有预设与收藏。当前数据已自动下载为备份文件，继续导入吗？", { okText: "继续导入" }))) {
                             dataStatus.textContent = "已取消导入";
                             return;
                         }
                         const count = await mplImportSidebarBackup(payload);
                         const msg = `导入完成：${count} 个预设，${(MPL_SIDEBAR.favorites || []).length} 个收藏夹`;
                         dataStatus.textContent = msg;
-                        alert(msg);
+                        void mplAlert(msg);
                     } catch (e) {
                         const msg = "导入失败：" + ((e && e.message) || e);
                         dataStatus.textContent = msg;
-                        alert(msg);
+                        void mplAlert(msg);
                     } finally {
                         fileInput.value = "";
                     }
@@ -10467,7 +10651,7 @@ app.registerExtension({
                     } catch (e) {
                         const msg = "导出失败：" + ((e && e.message) || e);
                         dataStatus.textContent = msg;
-                        alert(msg);
+                        void mplAlert(msg);
                     }
                 }));
                 dataButtons.appendChild(mkDataBtn("导入预设和收藏", false, () => fileInput.click()));
@@ -10805,7 +10989,7 @@ app.registerExtension({
                             deleteBtn.onmouseenter = () => deleteBtn.style.background = "#f55";
                             deleteBtn.onmouseleave = () => deleteBtn.style.background = "#f44336";
                             deleteBtn.onclick = async () => {
-                                if (confirm(`确定要删除预设 "${presetName}" 吗？`)) {
+                                if (await mplConfirm(`确定要删除预设 "${presetName}" 吗？`, { danger: true, okText: "删除" })) {
                                     try {
                                         await api.fetchApi("/malora/lora/delete_preset", {
                                             method: "POST",
@@ -10815,7 +10999,7 @@ app.registerExtension({
                                         // 重新加载列表
                                         await loadPresets();
                                     } catch (e) {
-                                        alert("删除失败: " + e);
+                                        void mplAlert("删除失败: " + e);
                                     }
                                 }
                             };
