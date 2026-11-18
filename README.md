@@ -8,6 +8,14 @@ A standalone, visual LoRA loader node for ComfyUI — organize LoRAs into groups
 
 Only notable changes are listed here; minor visual or text tweaks are omitted.
 
+### 1.0.5
+
+- Added author recommended weights: row badges, metadata refresh statistics, and one-click apply
+- Recommended weights are detected and saved from every metadata crawl path; newly added LoRAs inherit saved values
+- The LoRA info dialog shows recommended weight; LORA string imports sync trigger words and recommended weights
+- The metadata manager only lists LoRAs whose Civitai info has a recommendation but local info does not; items without one are skipped
+- Added a layout option to hide the recommended-weight column
+
 ### 1.0.4
 
 - Added preset and favorites export/import in Settings
@@ -19,12 +27,6 @@ Only notable changes are listed here; minor visual or text tweaks are omitted.
 - Added target-group selection in the Add LoRA dialog
 - Added a layout guard that keeps the embedded panel aligned with the node width
 - Added a layout option to hide the CLIP weight column
-- Added author recommended weight badges and included them in metadata refresh results
-- Reserved a fixed recommended-weight column for aligned rows and added an option to hide it
-- Recommended-weight detection now runs from every metadata crawl path, including Civitai info and Lora Manager
-- Newly added LoRAs inherit saved recommended weights; the value is also shown in the LoRA info dialog
-- LoRAs whose Civitai info lists a recommended weight but whose local info lacks it appear in the metadata manager's pending list; those without one are skipped
-- LORA string imports now sync trigger words and recommended weights from saved LoRA info
 
 ### 1.0.3
 
