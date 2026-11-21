@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-lyw-ma-loader"
 description = "Powerful LoRA loader for ComfyUI: presets, folders, multi-select, Civitai metadata and previews, optional Lora Manager integration."
-version = "1.0.7"
+version = "1.0.8"
 license = { text = "MIT License" }
 requires-python = ">=3.9"
 dependencies = [
