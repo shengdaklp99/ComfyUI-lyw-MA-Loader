@@ -14,6 +14,7 @@ import hashlib
 import urllib.request
 import urllib.error
 import urllib.parse
+import io
 import re
 import shutil
 import tempfile
@@ -3323,6 +3324,65 @@ async def probe_save_targets(request):
     except Exception as e:
         print(f"探测保存位置时出错: {e}")
         return web.json_response({"status": "error", "message": f"服务器内部错误: {e}"}, status=500)
+
+@PromptServer.instance.routes.post("/malora/lora/upload_preview")
+async def upload_lora_preview(request):
+    """接收原始图片字节，保存为 LoRA 同目录预览图，并同步给 Lora-Manager。"""
+    try:
+        lora_name = str(request.query.get("name") or "").strip()
+        if not lora_name:
+            return web.json_response({"status": "error", "message": "缺少 name 参数"}, status=400)
+        lora_path = folder_paths.get_full_path("loras", lora_name)
+        if not lora_path or not os.path.isfile(lora_path):
+            return web.json_response({"status": "error", "message": f"LoRA文件未找到: {lora_name}"}, status=404)
+        raw = await request.read()
+        if not raw:
+            return web.json_response({"status": "error", "message": "图片内容为空"}, status=400)
+        if len(raw) > 20 * 1024 * 1024:
+            return web.json_response({"status": "error", "message": "图片不能超过 20MB"}, status=413)
+        try:
+            with Image.open(io.BytesIO(raw)) as im:
+                fmt = str(im.format or "").upper()
+                im.verify()
+        except Exception:
+            return web.json_response({"status": "error", "message": "不是可识别的图片文件"}, status=400)
+        ext = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}.get(fmt)
+        if not ext:
+            return web.json_response({"status": "error", "message": "仅支持 PNG / JPG / WEBP"}, status=400)
+
+        lora_dir = os.path.dirname(lora_path)
+        stem = os.path.splitext(os.path.basename(lora_path))[0]
+        destination = os.path.join(lora_dir, stem + ext)
+        fd, temp_path = tempfile.mkstemp(prefix=".mpl-preview-", suffix=ext, dir=lora_dir)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(raw)
+            for old_ext in _LORA_PREVIEW_SUFFIXES:
+                old_path = os.path.join(lora_dir, stem + old_ext)
+                if os.path.isfile(old_path) and os.path.normcase(old_path) != os.path.normcase(destination):
+                    try:
+                        os.remove(old_path)
+                    except OSError:
+                        pass
+            os.replace(temp_path, destination)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+        try:
+            lm_sidecar.write(lora_path, preview=destination)
+            _LM_META_CACHE.pop(lm_sidecar.sidecar_path(lora_path), None)
+        except Exception as e:
+            print(f"⚠️ [MA Loader] 保存预览图信息失败: {e}")
+        try:
+            _lm_push_preview(lora_path, destination)
+        except Exception as e:
+            print(f"⚠️ [MA Loader] 同步预览图到 Lora-Manager 失败: {e}")
+        _META_INVENTORY_CACHE.clear()
+        return web.json_response({"status": "success", "message": "预览图已更新", "preview": destination})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"上传预览图失败: {e}"}, status=500)
+
 
 @PromptServer.instance.routes.post("/malora/lora/save_lora_file")
 async def save_lora_file(request):

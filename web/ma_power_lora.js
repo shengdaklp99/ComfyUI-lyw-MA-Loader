@@ -56,6 +56,7 @@ const MPL_ICONS = {
     edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>',
     refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
     link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    target: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
     palette: '<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
     grid: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
     list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
@@ -76,6 +77,52 @@ function mplIcon(name, size) {
     if (!body) return "";
     const s = size || 16;
     return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;flex:0 0 auto;">${body}</svg>`;
+}
+
+function mplIsMaNode(node) {
+    return !!node && (node.type === NODE_NAME || node.constructor?.type === NODE_NAME);
+}
+function mplMaNodes() {
+    return (app?.graph?._nodes || []).filter(mplIsMaNode);
+}
+function mplPickTopbarMaNode() {
+    const selected = app?.canvas?.selected_nodes;
+    const selectedNodes = selected instanceof Map ? [...selected.values()] : Object.values(selected || {});
+    return selectedNodes.find(mplIsMaNode) || mplMaNodes()[0] || null;
+}
+function mplOpenTopbarLoraModal() {
+    const node = mplPickTopbarMaNode();
+    if (!node) {
+        void mplAlert("请先在工作流中添加 lyw-MA加载器 节点");
+        return;
+    }
+    node.showAddLoraModal({ fromTopbar: true, targetNodeId: node.id });
+}
+function mplTopbarIcon() {
+    return `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="5"/>
+        <path d="M3 8h18" opacity=".45"/>
+        <path d="M7.5 17V10.2L12 14l4.5-3.8V17" stroke-width="2.1"/>
+        <circle cx="18.8" cy="5.5" r="1.8" fill="#ffd166" stroke="none"/>
+    </svg>`;
+}
+function mplMountTopbarButton() {
+    if (document.getElementById("mpl-topbar-btn")) return true;
+    const group = document.querySelector(".actionbar-container .flex.h-full.shrink-0.items-center.gap-1");
+    if (!group) return false;
+    const btn = document.createElement("button");
+    btn.id = "mpl-topbar-btn";
+    btn.type = "button";
+    btn.title = "MA LoRA 管理器：添加 / 替换 LoRA";
+    btn.setAttribute("aria-label", "MA LoRA 管理器");
+    btn.style.cssText = "display:inline-flex;align-items:center;justify-content:center;width:34px;height:32px;padding:0;border:none;border-radius:8px;background:transparent;color:inherit;cursor:pointer;transition:background .15s,transform .15s;";
+    btn.onmouseenter = () => { btn.style.background = "rgba(108,140,255,0.18)"; btn.style.transform = "translateY(-1px)"; };
+    btn.onmouseleave = () => { btn.style.background = "transparent"; btn.style.transform = ""; };
+    btn.innerHTML = mplTopbarIcon();
+    btn.onclick = (e) => { e.stopPropagation(); mplOpenTopbarLoraModal(); };
+    group.appendChild(btn);
+    return true;
 }
 
 // 颜色来源模式：跟随全局（global）/ 独立固定（custom）。切换只改 UI，确定时写入对象持久化
@@ -1637,6 +1684,19 @@ function mplGetSubfolderNames(folderTree, pathParts) {
 
 app.registerExtension({
     name: "MA.Power.Lora",
+    setup() {
+        let timer = 0;
+        const schedule = () => {
+            if (timer) return;
+            timer = setTimeout(() => {
+                timer = 0;
+                mplMountTopbarButton();
+            }, 0);
+        };
+        const observer = new MutationObserver(schedule);
+        observer.observe(document.body, { childList: true, subtree: true });
+        schedule();
+    },
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === NODE_NAME) {
             const MPL_MIN_W = 640; //设置强力lora加载器节点的最小宽高（双栏：左预设/收藏 + 右列表）
@@ -1760,15 +1820,15 @@ app.registerExtension({
                 if (!this.layoutSettings) {
                     const saved = this.properties["layout_settings"];
                     const defaults = {
-                        weightStyle: "arrows",
+                        weightStyle: "slider",
                         sliderStep: 0.05,
                         sliderMin: -2,
                         sliderMax: 2,
                         sliderWidth: 110,
                         showWeightValue: true,
                         snapToZero: true,
-                        hideClip: false,
-                        hideRecWeight: false,
+                        hideClip: true,
+                        hideRecWeight: true,
                     };
                     this.layoutSettings = (saved && typeof saved === "object")
                         ? Object.assign({}, defaults, saved)
@@ -1787,7 +1847,7 @@ app.registerExtension({
                 // 初始化文件夹全局默认颜色（外卡片背景 / 里标题栏 / 左侧色条）
                 if (!this.folderColorSettings) {
                     const savedFolderColors = this.properties["folder_color_settings"];
-                    const folderColorDefaults = { outer: "", inner: "", bar: "", ignore: "", normal: "" };
+                    const folderColorDefaults = { outer: "", inner: "", bar: "", ignore: "", normal: "", loaded: "" };
                     this.folderColorSettings = (savedFolderColors && typeof savedFolderColors === "object")
                         ? Object.assign({}, folderColorDefaults, savedFolderColors)
                         : folderColorDefaults;
@@ -3814,6 +3874,9 @@ app.registerExtension({
                     .mpl-folder-row.has-sel {
                         border-left: 4px solid var(--folder-c, var(--folder-def-bar, var(--ma-accent))) !important;
                     }
+                    .mpl-folder-row.has-loaded:not(.ignored) > .mpl-folder-header {
+                        background: var(--folder-loaded-color, #2f6fc7) !important;
+                    }
                     .mpl-folder-ignore {
                         width: 22px !important; height: 22px !important;
                         padding: 0 !important; margin: 0 2px !important;
@@ -4176,15 +4239,15 @@ app.registerExtension({
 
                 // 恢复布局设置（从 properties 读取，确保刷新浏览器后仍生效）
                 const layoutDefaults = {
-                    weightStyle: "arrows",
+                    weightStyle: "slider",
                     sliderStep: 0.05,
                     sliderMin: -2,
                     sliderMax: 2,
                     sliderWidth: 110,
                     showWeightValue: true,
                     snapToZero: true,
-                    hideClip: false,
-                    hideRecWeight: false,
+                    hideClip: true,
+                    hideRecWeight: true,
                 };
                 if (this.properties["layout_settings"] && typeof this.properties["layout_settings"] === "object") {
                     this.layoutSettings = Object.assign({}, layoutDefaults, this.properties["layout_settings"]);
@@ -4278,7 +4341,7 @@ app.registerExtension({
                         ? Object.assign({}, colorDefaults, savedColors)
                         : colorDefaults;
                     const savedFolderColors = this.properties["folder_color_settings"];
-                    const folderColorDefaults = { outer: "", inner: "", bar: "", ignore: "", normal: "" };
+                    const folderColorDefaults = { outer: "", inner: "", bar: "", ignore: "", normal: "", loaded: "" };
                     this.folderColorSettings = (savedFolderColors && typeof savedFolderColors === "object")
                         ? Object.assign({}, folderColorDefaults, savedFolderColors)
                         : folderColorDefaults;
@@ -4375,6 +4438,8 @@ app.registerExtension({
                 else root.style.removeProperty("--folder-ignore-color");
                 if (f.normal && f.normal !== "#8b8d9b") root.style.setProperty("--folder-normal-color", f.normal);
                 else root.style.removeProperty("--folder-normal-color");
+                if (f.loaded) root.style.setProperty("--folder-loaded-color", f.loaded);
+                else root.style.removeProperty("--folder-loaded-color");
             };
             // =============== 选中状态 = 是否参与加载（容器级 loraData.selected 仅作旧工作流清理） ===============
             nodeType.prototype._ensureMultiSelectState = function() {
@@ -4440,6 +4505,8 @@ app.registerExtension({
                         // 文件夹左条：有任一 LoRA 被选中才显示
                         if (cnt > 0) fDiv.classList.add("has-sel");
                         else fDiv.classList.remove("has-sel");
+                        if (cnt > 0 && !folder.ignored) fDiv.classList.add("has-loaded");
+                        else fDiv.classList.remove("has-loaded");
                     });
                 }
                 if (this.updateWidget) this.updateWidget();
@@ -4733,12 +4800,14 @@ app.registerExtension({
                         // 文件夹左条：只有本文件夹内有 LoRA 被选中时才显示
                         if ((folder.loras || []).some(l => this._isMultiSelected(folder, l))) {
                             fDiv.classList.add("has-sel");
+                            if (!folder.ignored) fDiv.classList.add("has-loaded");
                         }
                         // 独立固定模式才用单条色；跟随全局时忽略，交由 --folder-def-* 统一控制
                         if (folder.colorMode !== "global") {
                             if (folder.color) fDiv.style.setProperty("--folder-c", folder.color);
                             if (folder.bgColor) fDiv.style.setProperty("--folder-bg", folder.bgColor);
                             if (folder.headBg) fDiv.style.setProperty("--folder-head-bg", folder.headBg);
+                            if (folder.loadedHeadBg) fDiv.style.setProperty("--folder-loaded-color", folder.loadedHeadBg);
                         }
                         // 右键文件夹菜单（颜色设置：强调条色 + 背景色；重命名；删除）
                         fDiv.oncontextmenu = (e) => {
@@ -5283,6 +5352,24 @@ app.registerExtension({
                     align-items: center;
                     justify-content: center;
                 `;
+                overlay.addEventListener("dragover", (e) => { e.preventDefault(); });
+                overlay.addEventListener("drop", (e) => {
+                    const file = e.dataTransfer?.files && e.dataTransfer.files[0];
+                    if (!file || !/^image\//i.test(file.type || "")) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const target = app?.canvas?.canvas || document.querySelector("canvas") || document.body;
+                    try { overlay.remove(); } catch (err) {}
+                    try {
+                        target.dispatchEvent(new DragEvent("drop", {
+                            bubbles: true,
+                            cancelable: true,
+                            dataTransfer: e.dataTransfer,
+                        }));
+                    } catch (err) {
+                        console.warn("[MA Loader] 转发工作流图片失败:", err);
+                    }
+                });
                 
                 // 创建弹窗
                 const dialog = document.createElement("div");
@@ -5308,7 +5395,6 @@ app.registerExtension({
                     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
                     color: #e8e8ee;
                 `;
-                
                 // 标题栏
                 const header = document.createElement("div");
                 header.style.cssText = `
@@ -5319,7 +5405,6 @@ app.registerExtension({
                     margin-bottom: 14px;
                     padding-bottom: 12px;
                     border-bottom: 1px solid #262a34;
-                    cursor: move;
                     user-select: none;
                 `;
                 
@@ -5499,7 +5584,91 @@ app.registerExtension({
                 };
 
                 const body = document.createElement("div");
-                body.style.cssText = "display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto;padding-right:2px;";
+                body.style.cssText = "display:flex;gap:14px;flex:1;min-height:0;overflow:auto;padding-right:2px;align-items:flex-start;";
+
+                const thumbPane = document.createElement("div");
+                thumbPane.style.cssText = "flex:0 0 136px;width:136px;display:flex;flex-direction:column;gap:6px;";
+                const thumbBox = document.createElement("div");
+                thumbBox.style.cssText = "position:relative;width:136px;height:180px;border:1px dashed #3b3d49;border-radius:10px;background:#15161c;overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,background .15s;";
+                thumbBox.title = "点击选择图片，或把图片拖到这里上传";
+                const thumbImg = document.createElement("img");
+                thumbImg.alt = "";
+                thumbImg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;";
+                const thumbHint = document.createElement("div");
+                thumbHint.textContent = "点击或拖入图片\n上传预览图";
+                thumbHint.style.cssText = "padding:12px;text-align:center;color:#8b93a8;font-size:12px;line-height:1.5;white-space:pre-line;pointer-events:none;";
+                const thumbStatus = document.createElement("div");
+                thumbStatus.style.cssText = "min-height:16px;text-align:center;color:#8b93a8;font-size:11px;";
+                const fileInput = document.createElement("input");
+                fileInput.type = "file";
+                fileInput.accept = "image/png,image/jpeg,image/webp";
+                fileInput.style.display = "none";
+                thumbBox.append(thumbImg, thumbHint);
+                thumbPane.append(thumbBox, thumbStatus, fileInput);
+
+                const refreshThumb = (bust) => {
+                    const safe = encodeURIComponent(loraName);
+                    thumbImg.src = api.apiURL(`/malora/lora/image?name=${safe}${bust ? "&t=" + Date.now() : mplBustSuffix(loraName)}`);
+                };
+                thumbImg.onload = () => { thumbImg.style.display = "block"; thumbHint.style.display = "none"; };
+                thumbImg.onerror = () => { thumbImg.style.display = "none"; thumbHint.style.display = "block"; };
+                const uploadPreview = async (file) => {
+                    if (!file) return;
+                    if (!/^image\//i.test(file.type || "")) {
+                        void mplAlert("请选择图片文件");
+                        return;
+                    }
+                    thumbStatus.textContent = "上传中…";
+                    try {
+                        const buf = await file.arrayBuffer();
+                        const resp = await api.fetchApi(`/malora/lora/upload_preview?name=${encodeURIComponent(loraName)}`, {
+                            method: "POST",
+                            headers: { "Content-Type": file.type || "application/octet-stream" },
+                            body: buf,
+                        });
+                        const rj = await resp.json().catch(() => ({}));
+                        if (!resp.ok || rj.status === "error") throw new Error(rj.message || `HTTP ${resp.status}`);
+                        mplBumpImage(loraName);
+                        refreshThumb(true);
+                        thumbStatus.textContent = "已更新";
+                        try { this.refreshLoraImageCache?.(loraName); } catch (e) {}
+                        this.renderEmbeddedList?.();
+                        this.updateWidget?.();
+                        setTimeout(() => { if (thumbStatus.textContent === "已更新") thumbStatus.textContent = ""; }, 1600);
+                    } catch (e) {
+                        thumbStatus.textContent = "上传失败";
+                        void mplAlert("上传预览图失败: " + (e?.message || e));
+                    }
+                };
+                thumbBox.onclick = () => fileInput.click();
+                fileInput.onchange = () => {
+                    const f = fileInput.files && fileInput.files[0];
+                    fileInput.value = "";
+                    if (f) void uploadPreview(f);
+                };
+                thumbBox.ondragover = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    thumbBox.style.borderColor = "var(--ma-accent, #6c8cff)";
+                    thumbBox.style.background = "rgba(108,140,255,0.12)";
+                };
+                thumbBox.ondragleave = () => {
+                    thumbBox.style.borderColor = "#3b3d49";
+                    thumbBox.style.background = "#15161c";
+                };
+                thumbBox.ondrop = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    thumbBox.style.borderColor = "#3b3d49";
+                    thumbBox.style.background = "#15161c";
+                    const f = e.dataTransfer?.files && e.dataTransfer.files[0];
+                    if (f) void uploadPreview(f);
+                };
+                refreshThumb(false);
+
+                const formPane = document.createElement("div");
+                formPane.style.cssText = "display:flex;flex-direction:column;flex:1;min-width:0;";
+                body.append(thumbPane, formPane);
 
                 const infoRow = (label, value, opts = {}) => {
                     const row = document.createElement("div");
@@ -5572,11 +5741,11 @@ app.registerExtension({
                 civitaiBtn.onmouseleave = () => { civitaiBtn.style.borderColor = "#2f3340"; civitaiBtn.style.color = "#c8cad6"; };
                 civitaiBtn.onclick = () => { try { this.openLoraCivitai(loraName); } catch (e) { console.warn(e); } };
                 actions.appendChild(civitaiBtn);
-                body.appendChild(actions);
+                formPane.appendChild(actions);
 
                 // 只读信息
-                body.appendChild(infoRow("文件名", loraStem));
-                body.appendChild(infoRow("位置", dirPath || "—", {
+                formPane.appendChild(infoRow("文件名", loraStem));
+                formPane.appendChild(infoRow("位置", dirPath || "—", {
                     mono: true,
                     title: "点击打开所在文件夹",
                     onClick: () => {
@@ -5587,11 +5756,11 @@ app.registerExtension({
                         }).catch((e) => console.warn("[MA Loader] 打开文件夹失败:", e));
                     },
                 }));
-                body.appendChild(infoRow("基础模型", String(lmInfo.base_model || "").trim() || "—"));
+                formPane.appendChild(infoRow("基础模型", String(lmInfo.base_model || "").trim() || "—"));
 
                 const _infoRecW = Number(lmInfo.recommended_weight);
                 const _hasInfoRec = Number.isFinite(_infoRecW) && _infoRecW > 0 && _infoRecW <= 1;
-                body.appendChild(infoRow("推荐权重", _hasInfoRec ? "荐 " + _infoRecW.toFixed(2) : "—", {
+                formPane.appendChild(infoRow("推荐权重", _hasInfoRec ? "荐 " + _infoRecW.toFixed(2) : "—", {
                     copy: false,
                     title: _hasInfoRec ? `作者推荐权重 ${_infoRecW.toFixed(2)}（${lmInfo.recommended_weight_source || "作者推荐"}）` : "未找到作者推荐权重",
                 }));
@@ -5606,7 +5775,7 @@ app.registerExtension({
                 triggerInput.onblur = () => triggerInput.style.borderColor = "#2f3340";
                 triggerInput.addEventListener("keydown", (e) => e.stopPropagation());
                 triggerInput.addEventListener("pointerdown", (e) => e.stopPropagation());
-                body.appendChild(fieldRow("触发词", triggerInput));
+                formPane.appendChild(fieldRow("触发词", triggerInput));
 
                 // 备注（可编辑）
                 const prevNote = String(lora.note || "");
@@ -5619,7 +5788,7 @@ app.registerExtension({
                 noteInput.onblur = () => noteInput.style.borderColor = "#2f3340";
                 noteInput.addEventListener("keydown", (e) => e.stopPropagation());
                 noteInput.addEventListener("pointerdown", (e) => e.stopPropagation());
-                body.appendChild(fieldRow("附加备注", noteInput, false));
+                formPane.appendChild(fieldRow("附加备注", noteInput, false));
 
                 // 底部按钮
                 const buttonContainer = document.createElement("div");
@@ -5723,8 +5892,6 @@ app.registerExtension({
                 dialog.appendChild(buttonContainer);
                 overlay.appendChild(dialog);
                 document.body.appendChild(overlay);
-
-                this.makeDialogDraggable(dialog, header);
 
                 setTimeout(() => { try { triggerInput.focus(); } catch (e) {} }, 100);
             };
@@ -7465,7 +7632,7 @@ app.registerExtension({
                 weightContainer.appendChild(increaseBtn);
 
                 // ========== 滑条模式（追加在箭头模式之后） ==========
-                const layoutCfg = this.layoutSettings || { weightStyle: "arrows" };
+                const layoutCfg = this.layoutSettings || { weightStyle: "slider" };
                 if (layoutCfg.weightStyle === "slider") {
                     // 清空箭头模式的子元素
                     while (weightContainer.firstChild) weightContainer.removeChild(weightContainer.firstChild);
@@ -7964,7 +8131,7 @@ app.registerExtension({
             nodeType.prototype.showFolderColorModal = function(folder, fDiv) {
                 const old = document.querySelector('.mpl-folder-color-overlay');
                 if (old) old.remove();
-                const DEF = { outer: "#23252e", inner: "#2c2e3a", bar: "#6c8cff", ignore: "#8fb8e8", normal: "#8fb8e8" };
+                const DEF = { outer: "#23252e", inner: "#2c2e3a", bar: "#6c8cff", ignore: "#8fb8e8", normal: "#8fb8e8", loaded: "#2f6fc7" };
                 const overlay = document.createElement("div");
                 overlay.className = "mpl-folder-color-overlay";
                 overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10040;display:flex;align-items:center;justify-content:center;";
@@ -7982,12 +8149,14 @@ app.registerExtension({
                     bar: gcs.bar || "",
                     ignore: gcs.ignore || "",
                     normal: gcs.normal && gcs.normal !== "#8b8d9b" ? gcs.normal : "",
+                    loaded: gcs.loaded || "",
                 };
-                const hasLocal = !!(folder.color || folder.bgColor || folder.headBg);
+                const hasLocal = !!(folder.color || folder.bgColor || folder.headBg || folder.loadedHeadBg);
                 const lcur = {
                     outer: folder.bgColor || gcur.outer || DEF.outer,
                     inner: folder.headBg || gcur.inner || DEF.inner,
                     bar: folder.color || gcur.bar || DEF.bar,
+                    loaded: folder.loadedHeadBg || gcur.loaded || DEF.loaded,
                 };
                 // 未显式记录过模式的旧数据，按「是否已有单条色」推断
                 const initialMode = folder.colorMode || (hasLocal ? "custom" : "global");
@@ -8031,7 +8200,8 @@ app.registerExtension({
                 const localSec = section("本条文件夹颜色", "选择颜色来源后，下方色块用于「独立固定」模式");
                 let applyFolderMode = () => {};
                 const modeSwitch = mplColorModeSwitch(localSec, initialMode, (mode) => applyFolderMode(mode));
-                const lInner = mkRow(localSec, "标题栏背景", lcur.inner);
+                const lInner = mkRow(localSec, "无加载标题背景颜色", lcur.inner);
+                const lLoaded = mkRow(localSec, "加载时标题背景颜色", lcur.loaded);
                 const lOuter = mkRow(localSec, "卡片背景", lcur.outer);
                 const lBar = mkRow(localSec, "左侧色条", lcur.bar);
 
@@ -8050,12 +8220,13 @@ app.registerExtension({
                     ph.style.background = lInner.value;
                     ph.style.color = "#eef1ff";
                 };
-                [lOuter, lInner, lBar].forEach(i => i.addEventListener("input", renderPreview));
+                [lOuter, lInner, lBar, lLoaded].forEach(i => i.addEventListener("input", renderPreview));
                 renderPreview();
                 dlg.appendChild(preview);
 
                 const globalSec = section("全局默认文件夹颜色", "跟随全局的文件夹使用此颜色；改动会同步到所有跟随全局的文件夹");
-                const gInner = mkRow(globalSec, "标题栏背景", gcur.inner || DEF.inner);
+                const gInner = mkRow(globalSec, "无加载标题背景颜色", gcur.inner || DEF.inner);
+                const gLoaded = mkRow(globalSec, "加载时标题背景颜色", gcur.loaded || DEF.loaded);
                 const gOuter = mkRow(globalSec, "卡片背景", gcur.outer || DEF.outer);
                 const gBar = mkRow(globalSec, "左侧色条", gcur.bar || DEF.bar);
                 const gIgnore = mkRow(globalSec, "忽略时颜色", gcur.ignore || DEF.ignore);
@@ -8065,10 +8236,10 @@ app.registerExtension({
                 applyFolderMode = (mode) => {
                     const follow = mode === "global";
                     if (follow) {
-                        lInner.value = gInner.value; lOuter.value = gOuter.value; lBar.value = gBar.value;
-                        [lInner, lOuter, lBar].forEach(i => delete i.dataset.cleared);
+                        lInner.value = gInner.value; lLoaded.value = gLoaded.value; lOuter.value = gOuter.value; lBar.value = gBar.value;
+                        [lInner, lLoaded, lOuter, lBar].forEach(i => delete i.dataset.cleared);
                     }
-                    [lInner, lOuter, lBar].forEach(i => {
+                    [lInner, lLoaded, lOuter, lBar].forEach(i => {
                         i.disabled = follow;
                         i.style.opacity = follow ? "0.45" : "1";
                         if (i.__clearBtn) { i.__clearBtn.style.pointerEvents = follow ? "none" : "auto"; i.__clearBtn.style.opacity = follow ? "0.4" : "1"; }
@@ -8077,9 +8248,9 @@ app.registerExtension({
                 };
                 applyFolderMode(modeSwitch.getMode());
                 // 跟随全局时，改全局色块，本条预览跟着变
-                [gInner, gOuter, gBar].forEach(i => i.addEventListener("input", () => {
+                [gInner, gLoaded, gOuter, gBar].forEach(i => i.addEventListener("input", () => {
                     if (modeSwitch.getMode() !== "global") return;
-                    lInner.value = gInner.value; lOuter.value = gOuter.value; lBar.value = gBar.value;
+                    lInner.value = gInner.value; lLoaded.value = gLoaded.value; lOuter.value = gOuter.value; lBar.value = gBar.value;
                     renderPreview();
                 }));
 
@@ -8089,7 +8260,7 @@ app.registerExtension({
                 clearBtn.textContent = "清除本条色";
                 clearBtn.style.cssText = "padding:6px 12px;background:#3a3a3a;border:1px solid #555;color:#ddd;border-radius:6px;cursor:pointer;margin-right:auto;";
                 clearBtn.onclick = () => {
-                    delete folder.color; delete folder.bgColor; delete folder.headBg;
+                    delete folder.color; delete folder.bgColor; delete folder.headBg; delete folder.loadedHeadBg;
                     folder.colorMode = "global";
                     this.renderEmbeddedList(); this.updateWidget();
                     overlay.remove();
@@ -8099,11 +8270,11 @@ app.registerExtension({
                 resetBtn.style.cssText = "padding:6px 12px;background:#3a3a3a;border:1px solid #555;color:#ddd;border-radius:6px;cursor:pointer;";
                 resetBtn.onclick = () => {
                     gOuter.value = DEF.outer; gInner.value = DEF.inner; gBar.value = DEF.bar;
-                    gIgnore.value = DEF.ignore; gNormal.value = DEF.normal;
+                    gIgnore.value = DEF.ignore; gNormal.value = DEF.normal; gLoaded.value = DEF.loaded;
                     gOuter.dataset.cleared = "1"; gInner.dataset.cleared = "1"; gBar.dataset.cleared = "1";
-                    gIgnore.dataset.cleared = "1"; gNormal.dataset.cleared = "1";
+                    gIgnore.dataset.cleared = "1"; gNormal.dataset.cleared = "1"; gLoaded.dataset.cleared = "1";
                     if (modeSwitch.getMode() === "global") {
-                        lOuter.value = DEF.outer; lInner.value = DEF.inner; lBar.value = DEF.bar;
+                        lOuter.value = DEF.outer; lInner.value = DEF.inner; lLoaded.value = DEF.loaded; lBar.value = DEF.bar;
                         renderPreview();
                     }
                 };
@@ -8121,9 +8292,10 @@ app.registerExtension({
                     if (mode === "custom") {
                         if (lOuter.dataset.cleared) delete folder.bgColor; else folder.bgColor = lOuter.value;
                         if (lInner.dataset.cleared) delete folder.headBg; else folder.headBg = lInner.value;
+                        if (lLoaded.dataset.cleared) delete folder.loadedHeadBg; else folder.loadedHeadBg = lLoaded.value;
                         if (lBar.dataset.cleared) delete folder.color; else folder.color = lBar.value;
                     } else {
-                        delete folder.color; delete folder.bgColor; delete folder.headBg;
+                        delete folder.color; delete folder.bgColor; delete folder.headBg; delete folder.loadedHeadBg;
                     }
                     // 全局默认（留空/清空则用内置默认）
                     this.folderColorSettings = {
@@ -8132,6 +8304,7 @@ app.registerExtension({
                         bar: gBar.dataset.cleared ? "" : gBar.value,
                         ignore: gIgnore.dataset.cleared ? "" : gIgnore.value,
                         normal: gNormal.dataset.cleared ? "" : gNormal.value,
+                        loaded: gLoaded.dataset.cleared ? "" : gLoaded.value,
                     };
                     this.properties["folder_color_settings"] = this.folderColorSettings;
                     this.renderEmbeddedList(); this.updateWidget();
@@ -8192,6 +8365,7 @@ app.registerExtension({
                     bar: f.bar || "",
                     ignore: f.ignore || "",
                     normal: f.normal || "",
+                    loaded: f.loaded || "",
                 };
                 this.properties["color_settings"] = this.colorSettings;
                 this.properties["folder_color_settings"] = this.folderColorSettings;
@@ -8284,7 +8458,7 @@ app.registerExtension({
                     const preset = {
                         name: name,
                         lora: { selectBg: cs.selectBg || "#2b3b5e", selectBar: cs.selectBar || "#6c8cff", selectText: cs.selectText || "#eef1ff" },
-                        folder: { outer: fs.outer || "", inner: fs.inner || "", bar: fs.bar || "", ignore: fs.ignore || "", normal: fs.normal || "" },
+                        folder: { outer: fs.outer || "", inner: fs.inner || "", bar: fs.bar || "", ignore: fs.ignore || "", normal: fs.normal || "", loaded: fs.loaded || "" },
                     };
                     const arr = this._loadCustomColorPresets();
                     arr.push(preset);
@@ -8588,6 +8762,9 @@ app.registerExtension({
                 mkItem("替换 LoRA", () => {
                     this.showAddLoraModal({ mode: 'replace', replaceTarget: { type, fIdx, lIdx } });
                 }, false, 'refresh');
+                mkItem("编辑信息", () => {
+                    this.showLoraEditModal(lora, type, fIdx, lIdx);
+                }, false, 'edit');
                 // 选中（=已启用）多条时统一操作多条，否则只操作右键这一条
                 const selectedLoras = this._getMultiSelectedLoras();
                 const actionLoras = selectedLoras.length > 1 ? selectedLoras : [lora];
@@ -8989,6 +9166,8 @@ app.registerExtension({
                 opts = opts || {};
                 // 单一窗口：窗口内用「➕ 添加 / 🔁 替换」切换；右键入口带 replaceTarget 时默认进入替换态
                 const replaceTarget = opts.replaceTarget || null; // {type, fIdx, lIdx}
+                const fromTopbar = opts.fromTopbar === true;
+                const targetNodeLabel = String(this.title || this.type || "当前节点");
                 try {
                     // 网格卡片图片由 /malora/lora/image?name=...&w= 按需加载，不依赖图片映射表，
                     // 所以这里不再 await loadLoraImageList()，避免打开弹窗被遍历扫描拖慢。
@@ -9238,7 +9417,7 @@ app.registerExtension({
                             const o = document.createElement("option");
                             o.value = v; o.textContent = t; addTargetSelect.appendChild(o);
                         };
-                        mkOpt("root", "📂 当前节点（不分组）");
+                        mkOpt("root", `📂 ${targetNodeLabel}（不分组）`);
                         (this.loraData.folders || []).forEach((f, i) => {
                             mkOpt("f:" + i, "📁 " + (f.name || ("组 " + (i + 1))) + "（本节点）");
                         });
@@ -9254,8 +9433,39 @@ app.registerExtension({
                     };
                     buildAddTargetOptions();
                     addTargetSelect.onchange = () => { try { localStorage.setItem("MA_ADD_TARGET", addTargetSelect.value); } catch (e) {} };
+                    const jumpToNodeBtn = document.createElement("button");
+                    jumpToNodeBtn.type = "button";
+                    jumpToNodeBtn.innerHTML = mplIcon("target", 14) + '<span style="margin-left:5px;">定位</span>';
+                    jumpToNodeBtn.title = fromTopbar ? `跳转到节点：${targetNodeLabel}` : "仅从顶部 MA 按钮打开时可用";
+                    jumpToNodeBtn.disabled = !fromTopbar;
+                    jumpToNodeBtn.style.cssText = "height:32px;display:inline-flex;align-items:center;justify-content:center;padding:0 10px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;flex:0 0 auto;transition:background .15s,border-color .15s,color .15s;" +
+                        (fromTopbar
+                            ? "background:rgba(108,140,255,0.16);border:1px solid rgba(108,140,255,0.5);color:#cfd8ff;"
+                            : "background:#272932;border:1px solid #3b3d49;color:#8b93a8;opacity:.4;cursor:default;");
+                    jumpToNodeBtn.onmouseenter = () => {
+                        if (!fromTopbar) return;
+                        jumpToNodeBtn.style.background = "rgba(108,140,255,0.26)";
+                        jumpToNodeBtn.style.borderColor = "rgba(108,140,255,0.75)";
+                    };
+                    jumpToNodeBtn.onmouseleave = () => {
+                        if (!fromTopbar) return;
+                        jumpToNodeBtn.style.background = "rgba(108,140,255,0.16)";
+                        jumpToNodeBtn.style.borderColor = "rgba(108,140,255,0.5)";
+                    };
+                    jumpToNodeBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        if (!fromTopbar) return;
+                        try {
+                            app.canvas?.centerOnNode?.(this);
+                            app.canvas?.selectNode?.(this);
+                            app.canvas?.setDirty?.(true, true);
+                        } catch (err) {}
+                        try { dialog.remove(); } catch (err) {}
+                        this._addLoraModal = null;
+                    };
                     addTargetWrap.appendChild(addTargetLabel);
                     addTargetWrap.appendChild(addTargetSelect);
+                    addTargetWrap.appendChild(jumpToNodeBtn);
                     toolbar.appendChild(addTargetWrap);
 
                     const resolveAddTarget = () => {
@@ -10800,7 +11010,7 @@ app.registerExtension({
                     radio.type = "radio";
                     radio.name = "mpl_weight_style";
                     radio.value = value;
-                    radio.checked = (this.layoutSettings?.weightStyle || "arrows") === value;
+                    radio.checked = (this.layoutSettings?.weightStyle || "slider") === value;
                     radio.style.cssText = "width: 18px; height: 18px; cursor: pointer;";
                     const info = document.createElement("div");
                     info.style.cssText = "flex: 1;";
@@ -10817,8 +11027,8 @@ app.registerExtension({
                     return { wrap, radio };
                 };
 
-                const styleArrows = buildStyleOption("arrows", "箭头按钮（默认）", "左右两个箭头按钮，每次点击 ±0.01；中间数字可点击直接输入。");
-                const styleSlider = buildStyleOption("slider", "滑条", "水平滑条拖动调整权重；右侧显示当前数值，数值仍可点击编辑。");
+                const styleArrows = buildStyleOption("arrows", "箭头按钮", "左右两个箭头按钮，每次点击 ±0.01；中间数字可点击直接输入。");
+                const styleSlider = buildStyleOption("slider", "滑条（默认）", "水平滑条拖动调整权重；右侧显示当前数值，数值仍可点击编辑。");
                 styleSection.appendChild(styleArrows.wrap);
                 styleSection.appendChild(styleSlider.wrap);
 
@@ -10884,8 +11094,8 @@ app.registerExtension({
                 };
                 const showValueRow = buildCheckboxRow("滑条旁显示当前数值", "showWeightValue");
                 const snapRow = buildCheckboxRow("拖动时吸附 0（±0.02 范围内）", "snapToZero");
-                const hideClipRow = buildCheckboxRow("隐藏 CLIP 权重列", "hideClip", false);
-                const hideRecWeightRow = buildCheckboxRow("隐藏推荐权重列", "hideRecWeight", false);
+                const hideClipRow = buildCheckboxRow("隐藏 CLIP 权重列", "hideClip", true);
+                const hideRecWeightRow = buildCheckboxRow("隐藏推荐权重列", "hideRecWeight", true);
                 sliderParamsBody.appendChild(showValueRow.row);
                 sliderParamsBody.appendChild(snapRow.row);
 
@@ -11051,7 +11261,7 @@ app.registerExtension({
                     if (this._animaModeWidget) this._animaModeWidget.value = selectedAnimaMode;
 
                     // 保存布局设置
-                    const selectedStyle = scope.querySelector('input[name="mpl_weight_style"]:checked')?.value || "arrows";
+                    const selectedStyle = scope.querySelector('input[name="mpl_weight_style"]:checked')?.value || "slider";
                     const newLayout = {
                         weightStyle: selectedStyle,
                         sliderStep: Math.max(0.01, parseFloat(stepRow.input.value) || 0.05),
